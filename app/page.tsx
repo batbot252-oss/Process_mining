@@ -1,4 +1,4 @@
-import ProcessExplorer from "@/components/ProcessExplorer";
+import ProcessExplorer from "../components/ProcessExplorer";
 
 export default function Page() {
   return <ProcessExplorer />;
