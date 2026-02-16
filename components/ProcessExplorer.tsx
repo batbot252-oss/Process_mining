@@ -33,7 +33,7 @@ import {
   pickDefaultFocus,
   formatHoursFromMin,
   formatDays8hFromMin,
-} from "@/lib/mining";
+} from "../lib/mining";
 import { buildStageColumns, nearestStageX, buildFullProcessGraph } from "../lib/layout";
 import { computePlaybackTrace, computePlaybackSegments, posOnSegment, Segment } from "../lib/playback";
 
