@@ -19,7 +19,7 @@ import ReactFlow, {
 } from "reactflow";
 import "reactflow/dist/style.css";
 
-import { TO_BE, ISSUE_FAMILIES, simulatePairedLog } from "@/lib/simulate";
+import { TO_BE, ISSUE_FAMILIES, simulatePairedLog } from "../lib/simulate";
 import {
   buildAllowedEdgeSet,
   buildDFG,
@@ -34,8 +34,8 @@ import {
   formatHoursFromMin,
   formatDays8hFromMin,
 } from "@/lib/mining";
-import { buildStageColumns, nearestStageX, buildFullProcessGraph } from "@/lib/layout";
-import { computePlaybackTrace, computePlaybackSegments, posOnSegment, Segment } from "@/lib/playback";
+import { buildStageColumns, nearestStageX, buildFullProcessGraph } from "../lib/layout";
+import { computePlaybackTrace, computePlaybackSegments, posOnSegment, Segment } from "../lib/playback";
 
 type LabelMode = "count" | "avg" | "p95" | "avg+p95" | "none";
 type Tab = "events" | "traces" | "stats";
