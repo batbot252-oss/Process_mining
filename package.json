@@ -11,5 +11,11 @@
     "react": "latest",
     "react-dom": "latest",
     "reactflow": "^11.11.4"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.0.0",
+    "@types/react-dom": "^18.0.0"
   }
 }
