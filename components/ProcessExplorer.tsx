@@ -5,739 +5,1003 @@ import ReactFlow, {
   Background,
   Controls,
   MiniMap,
-  Panel,
-  ReactFlowInstance,
-  addEdge,
+  ReactFlowProvider,
   applyEdgeChanges,
   applyNodeChanges,
-  Connection,
   Edge,
   EdgeChange,
   MarkerType,
   Node,
   NodeChange,
-  OnConnect,
-  NodeProps,
-  useReactFlow,
+  Position,
 } from "reactflow";
-import "reactflow/dist/style.css";
 
 /**
- * ProcessExplorer.tsx
- * - Celonis-like process graph explorer (engineering-oriented)
- * - Simulates AS-IS vs TO-BE event logs
- * - Conformance (AS-IS vs TO-BE), lead times, deviations, traces
- * - Draggable nodes + overlap reduction
- * - Token animation (a moving "ball") following one case trace
- *
- * This file is self-contained on purpose (single copy/paste).
+ * NOTE CSS:
+ * Next.js (App Router) interdit l'import global CSS depuis un composant.
+ * On injecte donc un CSS minimal (en bas dans le composant).
  */
 
-// -------------------- Types --------------------
+// ------------------------------
+// Types
+// ------------------------------
 
-type IssueFamily = "qualite" | "donnees" | "organisation" | "risque";
-
-const ISSUE_FAMILIES: { key: IssueFamily; label: string }[] = [
-  { key: "qualite", label: "Qualité / conformité" },
-  { key: "donnees", label: "Données / continuité numérique" },
-  { key: "organisation", label: "Organisation / flux" },
-  { key: "risque", label: "Risque" },
-];
+type Variant = "AS_IS" | "TO_BE";
 
 type Stage =
-  | "Entrées"
-  | "Pré-process"
-  | "Simulation"
-  | "Couplage"
-  | "Résultats"
-  | "Boucles";
+  | "BE"
+  | "BM"
+  | "SIMU"
+  | "PROTO"
+  | "QUALIF"
+  | "INDUS"
+  | "RELEASE";
 
-type StepId = string;
-
-type Step = {
-  id: StepId;
-  label: string;
-  tool: string;
-  stage: Stage;
-  headcount: number;
-};
-
-type Link = {
-  id: string;
-  from: StepId;
-  to: StepId;
-  artifact?: string;
-  /** Whether this transition is part of the TO-BE reference */
-  allowed: boolean;
-};
-
-type Event = {
-  caseId: string;
-  tsMin: number; // timestamp in minutes from case start
-  stepId: StepId;
-  stepLabel: string;
-  resource: string;
-  issue?: IssueFamily; // present only on "problem" steps/transitions
-};
-
-type Trace = {
-  signature: string;
-  steps: StepId[];
-  count: number;
-  avgLeadMin: number;
-  p95LeadMin: number;
-};
-
-type EdgeStats = {
-  count: number;
-  avgMin: number;
-  p95Min: number;
-};
-
-type ConformanceSummary = {
-  totalTransitions: number;
-  nonConformTransitions: number;
-  conformPct: number; // 0..1
-};
-
-type CaseLeadStats = {
-  avgMin: number;
-  p95Min: number;
-};
+type IssueFamily =
+  | "qualite_conformite"
+  | "donnees_continuite"
+  | "organisation_flux"
+  | "risque";
 
 type LabelMode = "count" | "avg" | "p95" | "avg+p95" | "none";
 
 type Tab = "events" | "traces" | "stats";
 
-type SimKnobs = {
-  cases: number;
-  seed: number;
-  skipGatesPct: number; // 0..1
-  manualTransferPct: number; // 0..1
-  uncontrolledLoopsPct: number; // 0..1
+type ActivityNodeData = {
+  kind: "activity";
+  label: string;
+  stage: Stage;
+  role: string;
+  tool?: string;
+  headcount: number;
+  // computed
+  traces?: number;
+  eventsCount?: number;
+  issues?: Record<IssueFamily, number>; // counts in AS-IS
 };
 
-type SimulationResult = {
-  asIs: Event[];
-  toBe: Event[];
-  focusDefault: StepId;
+type TokenNodeData = {
+  kind: "token";
 };
 
-type Pos = { x: number; y: number };
+type NodeData = ActivityNodeData | TokenNodeData;
 
-// -------------------- Process model (Flow-3D / ProCast / ABAQUS example) --------------------
+type EventRow = {
+  caseId: string;
+  idx: number;
+  variant: Variant;
+  activityId: string;
+  activity: string;
+  stage: Stage;
+  tsMin: number; // minutes since case start
+  durationMin: number; // duration spent IN this activity
+  resource: string;
+  tool?: string;
+  issue?: IssueFamily | null;
+};
 
-const STEPS: Step[] = [
-  { id: "cad_catpart", label: "Entrée CAO", tool: "CATIA / 3DEXP (CATPart)", stage: "Entrées", headcount: 2 },
-  { id: "sector", label: "Secteur", tool: "CATIA / 3DEXP", stage: "Entrées", headcount: 1 },
+type CaseStats = {
+  caseId: string;
+  variant: Variant;
+  startMin: number;
+  endMin: number;
+  leadTimeMin: number;
+  deviationEdges: number;
+  deviationTimeMin: number;
+};
 
-  { id: "prep_mesh", label: "Pré-process", tool: "Prépa / Maillage", stage: "Pré-process", headcount: 1 },
-  { id: "prep_mesh_def", label: "Pré-process (déformé)", tool: "Prépa / Maillage", stage: "Pré-process", headcount: 1 },
+type EdgeStats = {
+  from: string;
+  to: string;
+  count: number;
+  avgDurMin: number;
+  p95DurMin: number;
+};
 
-  { id: "flow_360", label: "Verse \"360\"", tool: "FLOW-3D", stage: "Simulation", headcount: 1 },
-  { id: "flow_zoom", label: "Remplissage \"zoom\"", tool: "FLOW-3D", stage: "Simulation", headcount: 1 },
-  { id: "aba_fill_mech", label: "Mécanique remplissage", tool: "ABAQUS", stage: "Couplage", headcount: 1 },
+type DFG = {
+  nodes: Map<
+    string,
+    {
+      activityId: string;
+      activity: string;
+      stage: Stage;
+      countEvents: number;
+      countTraces: number;
+      issues: Record<IssueFamily, number>;
+    }
+  >;
+  edges: Map<string, EdgeStats>; // key: from->to
+};
 
-  { id: "procast_preheat", label: "Thermique préchauff.", tool: "ProCast", stage: "Simulation", headcount: 1 },
-  { id: "aba_preheat", label: "Calcul préchauff.", tool: "ABAQUS", stage: "Couplage", headcount: 1 },
+type ModelEdge = { from: string; to: string };
 
-  { id: "export_stl", label: "Export STL", tool: "STL", stage: "Résultats", headcount: 0 },
+type ProcessModel = {
+  id: string;
+  title: string;
+  nodes: {
+    id: string;
+    label: string;
+    stage: Stage;
+    role: string;
+    tool?: string;
+    headcount: number;
+  }[];
+  edges: ModelEdge[];
+};
 
-  // Boucles / rework (engineering-oriented)
-  { id: "rework_cao", label: "Rework CAO", tool: "BE", stage: "Boucles", headcount: 2 },
-  { id: "rework_mesh", label: "Rework maillage", tool: "BM / Prépa", stage: "Boucles", headcount: 1 },
-  { id: "rework_params", label: "Recalage paramètres", tool: "SIMU", stage: "Boucles", headcount: 1 },
-  { id: "risk_review", label: "Revue risque", tool: "Qualité", stage: "Boucles", headcount: 1 },
+// ------------------------------
+// Constants
+// ------------------------------
+
+export const ISSUE_FAMILIES: Record<IssueFamily, { label: string; short: string }> = {
+  qualite_conformite: { label: "Qualité / conformité", short: "Q" },
+  donnees_continuite: { label: "Données / continuité numérique", short: "D" },
+  organisation_flux: { label: "Organisation / flux", short: "O" },
+  risque: { label: "Risque", short: "R" },
+};
+
+const STAGE_COLUMNS: Stage[] = [
+  "BE",
+  "BM",
+  "SIMU",
+  "PROTO",
+  "QUALIF",
+  "INDUS",
+  "RELEASE",
 ];
 
-const LINKS: Link[] = [
-  // Main chain
-  { id: "e1", from: "cad_catpart", to: "prep_mesh", artifact: "catpart", allowed: true },
-  { id: "e2", from: "prep_mesh", to: "flow_360", artifact: "stl", allowed: true },
-  { id: "e3", from: "flow_360", to: "flow_zoom", artifact: "csv (débit)", allowed: true },
-  { id: "e4", from: "flow_zoom", to: "aba_fill_mech", artifact: "trc", allowed: true },
-  { id: "e5", from: "aba_fill_mech", to: "export_stl", artifact: "stl", allowed: true },
+// ------------------------------
+// Helpers (math + format)
+// ------------------------------
 
-  // Preheat branch
-  { id: "e6", from: "sector", to: "procast_preheat", artifact: "catpart", allowed: true },
-  { id: "e7", from: "procast_preheat", to: "aba_preheat", artifact: "fld", allowed: true },
-  { id: "e8", from: "aba_preheat", to: "prep_mesh_def", artifact: "dat (coord def)", allowed: true },
-  { id: "e9", from: "prep_mesh_def", to: "flow_zoom", artifact: "stl (déformé)", allowed: true },
-
-  // Rework loops (NOT in TO-BE reference by default)
-  { id: "r1", from: "flow_zoom", to: "rework_params", artifact: "NOK", allowed: false },
-  { id: "r2", from: "rework_params", to: "flow_zoom", artifact: "relaunch", allowed: false },
-
-  { id: "r3", from: "aba_fill_mech", to: "risk_review", artifact: "écart", allowed: false },
-  { id: "r4", from: "risk_review", to: "aba_fill_mech", artifact: "GO", allowed: false },
-
-  { id: "r5", from: "prep_mesh", to: "rework_mesh", artifact: "maillage NOK", allowed: false },
-  { id: "r6", from: "rework_mesh", to: "prep_mesh", artifact: "corrigé", allowed: false },
-
-  { id: "r7", from: "cad_catpart", to: "rework_cao", artifact: "modif", allowed: false },
-  { id: "r8", from: "rework_cao", to: "cad_catpart", artifact: "nouvelle ver.", allowed: false },
-];
-
-const STAGE_ORDER: Stage[] = ["Entrées", "Pré-process", "Simulation", "Couplage", "Résultats", "Boucles"]; 
-
-// -------------------- Utilities --------------------
-
-function clamp01(v: number): number {
-  return Math.max(0, Math.min(1, v));
+function clamp(v: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, v));
 }
 
-function formatPct(v01: number): string {
-  return `${Math.round(clamp01(v01) * 100)}%`;
+function percentile(values: number[], p: number) {
+  if (values.length === 0) return 0;
+  const arr = [...values].sort((a, b) => a - b);
+  const idx = (p / 100) * (arr.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return arr[lo];
+  const t = idx - lo;
+  return arr[lo] * (1 - t) + arr[hi] * t;
 }
 
-function formatHoursFromMin(min: number): string {
+function mean(values: number[]) {
+  if (values.length === 0) return 0;
+  let s = 0;
+  for (const v of values) s += v;
+  return s / values.length;
+}
+
+function fmtHoursFromMin(min: number) {
   const h = min / 60;
-  if (h < 1) return `${Math.round(min)}m`;
-  if (h < 24) return `${h.toFixed(1)}h`;
-  const d = h / 8;
-  return `${d.toFixed(1)}j (8h)`;
+  if (h < 1) return `${Math.round(min)} min`;
+  if (h < 12) return `${h.toFixed(1)} h`;
+  return `${Math.round(h)} h`;
 }
 
-function p95(values: number[]): number {
-  if (values.length === 0) return 0;
-  const sorted = [...values].sort((a, b) => a - b);
-  const idx = Math.ceil(0.95 * sorted.length) - 1;
-  return sorted[Math.max(0, Math.min(sorted.length - 1, idx))];
+function fmtDays8hFromMin(min: number) {
+  const days = min / (60 * 8);
+  if (days < 1) return `${(min / 60).toFixed(1)} h`;
+  return `${days.toFixed(1)} j (8h)`;
 }
 
-function mean(values: number[]): number {
-  if (values.length === 0) return 0;
-  return values.reduce((a, b) => a + b, 0) / values.length;
-}
-
-// Deterministic RNG
-function mulberry32(seed: number): () => number {
-  let t = seed >>> 0;
+function seededRand(seed: number) {
+  // xorshift32
+  let x = seed | 0;
   return () => {
-    t += 0x6d2b79f5;
-    let x = t;
-    x = Math.imul(x ^ (x >>> 15), x | 1);
-    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
-    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+    x ^= x << 13;
+    x ^= x >>> 17;
+    x ^= x << 5;
+    // [0,1)
+    return ((x >>> 0) % 1_000_000) / 1_000_000;
   };
 }
 
-function pick<T>(rng: () => number, items: T[]): T {
-  return items[Math.floor(rng() * items.length)];
+function pick<T>(rng: () => number, arr: T[]) {
+  return arr[Math.floor(rng() * arr.length)];
 }
 
-function jitter(rng: () => number, base: number, spread: number): number {
-  return Math.max(1, base + (rng() - 0.5) * spread);
+function maybe(rng: () => number, p: number) {
+  return rng() < p;
 }
 
-// -------------------- Layout --------------------
+// ------------------------------
+// Process Models (AS-IS / TO-BE)
+// ------------------------------
 
-function buildStageColumns(): Record<Stage, number> {
-  const gap = 300;
-  const startX = 0;
-  const map = {} as Record<Stage, number>;
-  STAGE_ORDER.forEach((s, i) => {
-    map[s] = startX + i * gap;
-  });
-  return map;
+/**
+ * Process orienté Engineering (BE/BM/SIMU) inspiré d'une lecture « Celonis-like ».
+ * Les noeuds représentent des "boîtes" (activités agrégées). Les events sont les actions détaillées.
+ */
+
+export const TO_BE: ProcessModel = {
+  id: "to-be-v1",
+  title: "TO-BE — Engineering Digital Thread",
+  nodes: [
+    {
+      id: "be_req",
+      label: "BE — Besoin & exigences\n(Fonctions, contraintes)",
+      stage: "BE",
+      role: "Lead BE",
+      tool: "PLM",
+      headcount: 2,
+    },
+    {
+      id: "be_cad",
+      label: "BE — CAO paramétrée\n(Modèle + paramètres)",
+      stage: "BE",
+      role: "BE CAO",
+      tool: "CATIA / 3DX",
+      headcount: 3,
+    },
+    {
+      id: "be_review",
+      label: "BE — Revue conception\n(contrôle, standard)",
+      stage: "BE",
+      role: "Lead BE",
+      tool: "PLM",
+      headcount: 2,
+    },
+    {
+      id: "bm_methods",
+      label: "BM — Méthodes / industrialisation\n(fabricabilité, gamme)",
+      stage: "BM",
+      role: "BM",
+      tool: "ERP / PLM",
+      headcount: 2,
+    },
+    {
+      id: "bm_pre_sim",
+      label: "BM — Préparation simulation\n(données, maillage, hypothèses)",
+      stage: "BM",
+      role: "Ingénieur Hybride",
+      tool: "ANSA / Visual Mesh",
+      headcount: 1,
+    },
+    {
+      id: "sim_setup",
+      label: "SIMU — Setup\n(BC, matériaux, charge)",
+      stage: "SIMU",
+      role: "Simu",
+      tool: "ABAQUS / ProCast",
+      headcount: 2,
+    },
+    {
+      id: "sim_run",
+      label: "SIMU — Calcul\n(runs, convergence)",
+      stage: "SIMU",
+      role: "Simu",
+      tool: "HPC",
+      headcount: 1,
+    },
+    {
+      id: "sim_post",
+      label: "SIMU — Post-traitement\n(résultats, critères)",
+      stage: "SIMU",
+      role: "Simu",
+      tool: "Post",
+      headcount: 1,
+    },
+    {
+      id: "decision",
+      label: "Décision\n(OK / Rework + raison)",
+      stage: "SIMU",
+      role: "IPT",
+      tool: "PLM",
+      headcount: 4,
+    },
+    {
+      id: "proto",
+      label: "PROTO — Essai\n(proto, mesures)",
+      stage: "PROTO",
+      role: "Proto",
+      tool: "Lab",
+      headcount: 2,
+    },
+    {
+      id: "qualif",
+      label: "QUALIF — Dossier & conformité\n(validation)",
+      stage: "QUALIF",
+      role: "Qualité",
+      tool: "PLM",
+      headcount: 1,
+    },
+    {
+      id: "release",
+      label: "RELEASE\nRéférence validée", 
+      stage: "RELEASE",
+      role: "PLM",
+      tool: "PLM",
+      headcount: 1,
+    },
+  ],
+  edges: [
+    { from: "be_req", to: "be_cad" },
+    { from: "be_cad", to: "be_review" },
+    { from: "be_review", to: "bm_methods" },
+    { from: "bm_methods", to: "bm_pre_sim" },
+    { from: "bm_pre_sim", to: "sim_setup" },
+    { from: "sim_setup", to: "sim_run" },
+    { from: "sim_run", to: "sim_post" },
+    { from: "sim_post", to: "decision" },
+    { from: "decision", to: "proto" },
+    { from: "proto", to: "qualif" },
+    { from: "qualif", to: "release" },
+    // Boucle contrôlée (rework)
+    { from: "decision", to: "be_cad" },
+    { from: "decision", to: "bm_pre_sim" },
+  ],
+};
+
+/**
+ * AS-IS = même "colonne vertébrale" mais plus de boucles et contournements (data discontinuity / org / qualité / risque).
+ */
+export const AS_IS_MODEL: ProcessModel = {
+  id: "as-is-v1",
+  title: "AS-IS — Flux réel (avec rework)",
+  nodes: TO_BE.nodes,
+  edges: [
+    ...TO_BE.edges,
+    // contournements et retours plus fréquents
+    { from: "bm_methods", to: "be_cad" },
+    { from: "sim_post", to: "bm_pre_sim" },
+    { from: "proto", to: "be_cad" },
+    { from: "proto", to: "bm_methods" },
+  ],
+};
+
+function modelAllowedEdgeSet(model: ProcessModel) {
+  const set = new Set<string>();
+  for (const e of model.edges) set.add(`${e.from}→${e.to}`);
+  return set;
 }
 
-function nearestStageX(x: number, stageXs: number[]): number {
-  if (stageXs.length === 0) return x;
-  let best = stageXs[0];
-  let bestD = Math.abs(x - best);
-  for (const sx of stageXs) {
-    const d = Math.abs(x - sx);
-    if (d < bestD) {
-      bestD = d;
-      best = sx;
-    }
-  }
-  return best;
-}
+// ------------------------------
+// Simulation (event log)
+// ------------------------------
 
-function buildInitialPositions(manual: Record<string, Pos> | null): Record<string, Pos> {
-  const stageX = buildStageColumns();
-  const byStage = new Map<Stage, Step[]>();
-  for (const s of STAGE_ORDER) byStage.set(s, []);
-  for (const step of STEPS) byStage.get(step.stage)?.push(step);
+type SimConfig = {
+  nCases: number;
+  seed: number;
+};
 
-  const pos: Record<string, Pos> = {};
+const DEFAULT_SIM: SimConfig = { nCases: 40, seed: 42 };
 
-  for (const stage of STAGE_ORDER) {
-    const steps = byStage.get(stage) ?? [];
-    steps.sort((a, b) => a.label.localeCompare(b.label));
-
-    const x = stageX[stage];
-    const y0 = 30;
-    const dy = 110;
-
-    steps.forEach((st, idx) => {
-      const base = { x, y: y0 + idx * dy };
-      pos[st.id] = manual?.[st.id] ?? base;
-    });
-  }
-
-  return pos;
-}
-
-function resolveOverlaps(nodes: Node[], minDist = 60): Node[] {
-  // Simple repulsion in Y for nodes sharing close X range.
-  const out = nodes.map((n) => ({ ...n, position: { ...n.position } }));
-  const maxIter = 12;
-
-  for (let it = 0; it < maxIter; it++) {
-    let moved = false;
-    for (let i = 0; i < out.length; i++) {
-      for (let j = i + 1; j < out.length; j++) {
-        const a = out[i];
-        const b = out[j];
-        if (a.id === "__token__" || b.id === "__token__") continue;
-
-        const dx = Math.abs(a.position.x - b.position.x);
-        if (dx > 40) continue;
-        const dy = b.position.y - a.position.y;
-        if (Math.abs(dy) < minDist) {
-          const push = (minDist - Math.abs(dy)) / 2;
-          a.position.y -= Math.sign(dy || 1) * push;
-          b.position.y += Math.sign(dy || 1) * push;
-          moved = true;
-        }
-      }
-    }
-    if (!moved) break;
-  }
-
-  return out;
-}
-
-// -------------------- Simulation + Mining --------------------
-
-function buildAllowedEdgeSet(): Set<string> {
-  const allowed = new Set<string>();
-  for (const e of LINKS) {
-    if (e.allowed) allowed.add(`${e.from}=>${e.to}`);
-  }
-  return allowed;
-}
-
-function simulatePairedLog(knobs: SimKnobs): SimulationResult {
-  const cases = Math.max(1, Math.floor(knobs.cases));
-  const rng = mulberry32(knobs.seed);
-
-  const asIs: Event[] = [];
-  const toBe: Event[] = [];
-
-  const allowed = buildAllowedEdgeSet();
-
-  // Baseline durations per step (minutes)
-  const baseDur: Record<StepId, { base: number; spread: number }> = {
-    cad_catpart: { base: 120, spread: 80 },
-    sector: { base: 60, spread: 40 },
-    prep_mesh: { base: 90, spread: 60 },
-    prep_mesh_def: { base: 70, spread: 50 },
-    procast_preheat: { base: 180, spread: 120 },
-    aba_preheat: { base: 150, spread: 90 },
-    flow_360: { base: 120, spread: 90 },
-    flow_zoom: { base: 240, spread: 180 },
-    aba_fill_mech: { base: 200, spread: 140 },
-    export_stl: { base: 20, spread: 10 },
-    rework_cao: { base: 160, spread: 120 },
-    rework_mesh: { base: 90, spread: 70 },
-    rework_params: { base: 120, spread: 90 },
-    risk_review: { base: 60, spread: 40 },
-  };
-
-  // Resources pool (effectifs)
-  const RES: Record<StepId, string[]> = {
-    cad_catpart: ["BE-01", "BE-02", "BE-03"],
-    sector: ["BE-04", "BE-02"],
-    prep_mesh: ["BM-01", "BM-02"],
-    prep_mesh_def: ["BM-01", "BM-03"],
-    procast_preheat: ["SIMU-01", "SIMU-02"],
-    aba_preheat: ["SIMU-02", "SIMU-03"],
-    flow_360: ["SIMU-01", "SIMU-04"],
-    flow_zoom: ["SIMU-01", "SIMU-04", "SIMU-05"],
-    aba_fill_mech: ["SIMU-03", "SIMU-06"],
-    export_stl: ["AUTO"],
-    rework_cao: ["BE-01", "BE-02"],
-    rework_mesh: ["BM-01", "BM-02"],
-    rework_params: ["SIMU-01", "SIMU-05"],
-    risk_review: ["Q-01", "Q-02"],
-  };
-
-  function emit(target: Event[], caseId: string, tsMin: number, stepId: StepId, issue?: IssueFamily): number {
-    const step = STEPS.find((s) => s.id === stepId);
-    const label = step?.label ?? stepId;
-    const pool = RES[stepId] ?? ["UNK"];
-    target.push({
-      caseId,
-      tsMin,
-      stepId,
-      stepLabel: label,
-      resource: pick(rng, pool),
-      ...(issue ? { issue } : {}),
-    });
-    const dur = baseDur[stepId] ? jitter(rng, baseDur[stepId].base, baseDur[stepId].spread) : jitter(rng, 60, 30);
-    return tsMin + dur;
-  }
-
-  // A simple case generator: always runs preheat branch + main branch; AS-IS can introduce deviations.
-  function runCase(caseIdx: number, mode: "asIs" | "toBe"): Event[] {
-    const out: Event[] = [];
-    const cid = `C${String(caseIdx + 1).padStart(4, "0")}`;
-
-    // knobs only apply to AS-IS
-    const skip = mode === "asIs" ? clamp01(knobs.skipGatesPct) : 0;
-    const manual = mode === "asIs" ? clamp01(knobs.manualTransferPct) : 0;
-    const loops = mode === "asIs" ? clamp01(knobs.uncontrolledLoopsPct) : 0;
-
-    let t = 0;
-
-    // Entry CAO
-    t = emit(out, cid, t, "cad_catpart");
-
-    // Occasional CAO rework (organisation / données)
-    if (mode === "asIs" && rng() < loops * 0.25) {
-      const issue = rng() < 0.5 ? "organisation" : "donnees";
-      t = emit(out, cid, t, "rework_cao", issue);
-      t = emit(out, cid, t, "cad_catpart");
-    }
-
-    // Pre-process mesh
-    if (!(mode === "asIs" && rng() < skip * 0.2)) {
-      t = emit(out, cid, t, "prep_mesh");
-    }
-
-    // Mesh rework
-    if (mode === "asIs" && rng() < loops * 0.2) {
-      t = emit(out, cid, t, "rework_mesh", "donnees");
-      t = emit(out, cid, t, "prep_mesh");
-    }
-
-    // Preheat branch
-    if (!(mode === "asIs" && rng() < skip * 0.35)) {
-      t = emit(out, cid, t, "sector");
-      t = emit(out, cid, t, "procast_preheat");
-      // Potential manual handoff
-      if (mode === "asIs" && rng() < manual * 0.4) {
-        // simulate waiting (organisation)
-        t += jitter(rng, 240, 180);
-      }
-      t = emit(out, cid, t, "aba_preheat");
-      t = emit(out, cid, t, "prep_mesh_def");
-    }
-
-    // Main flow
-    t = emit(out, cid, t, "flow_360");
-    t = emit(out, cid, t, "flow_zoom");
-
-    // Simulation loop due to quality/conformance
-    if (mode === "asIs" && rng() < loops * 0.35) {
-      t = emit(out, cid, t, "rework_params", "qualite");
-      t = emit(out, cid, t, "flow_zoom");
-    }
-
-    t = emit(out, cid, t, "aba_fill_mech");
-
-    // Risk loop
-    if (mode === "asIs" && rng() < loops * 0.2) {
-      t = emit(out, cid, t, "risk_review", "risque");
-      t = emit(out, cid, t, "aba_fill_mech");
-    }
-
-    t = emit(out, cid, t, "export_stl");
-
-    // Extra waiting time (organisation) on AS-IS
-    if (mode === "asIs" && rng() < 0.25) {
-      // add idle time by shifting all events after a random cut
-      const cut = Math.floor(rng() * out.length);
-      const extra = jitter(rng, 180, 240) * clamp01(0.2 + loops);
-      for (let i = cut; i < out.length; i++) out[i] = { ...out[i], tsMin: out[i].tsMin + extra };
-    }
-
-    // Sort just in case
-    out.sort((a, b) => a.tsMin - b.tsMin);
-    return out;
-  }
-
-  for (let i = 0; i < cases; i++) {
-    asIs.push(...runCase(i, "asIs"));
-    toBe.push(...runCase(i, "toBe"));
-  }
-
-  // Default focus: choose most frequent step in AS-IS
-  const freq = new Map<StepId, number>();
-  for (const ev of asIs) freq.set(ev.stepId, (freq.get(ev.stepId) ?? 0) + 1);
-  let best: StepId = "flow_zoom";
-  let bestN = -1;
-  for (const [k, v] of freq.entries()) {
-    if (v > bestN) {
-      best = k;
-      bestN = v;
-    }
-  }
-
-  // Keep a quick sanity: ensure TO-BE transitions are allowed; AS-IS can contain rework transitions.
-  // (We don't enforce allowed edges here; conformance is measured later.)
-  void allowed;
-
-  return { asIs, toBe, focusDefault: best };
-}
-
-function groupByCase(events: Event[]): Map<string, Event[]> {
-  const m = new Map<string, Event[]>();
-  for (const ev of events) {
-    const arr = m.get(ev.caseId) ?? [];
-    arr.push(ev);
-    m.set(ev.caseId, arr);
-  }
-  for (const [cid, arr] of m.entries()) {
-    arr.sort((a, b) => a.tsMin - b.tsMin);
-    m.set(cid, arr);
-  }
+function activityMetaById(model: ProcessModel) {
+  const m = new Map<string, (typeof model.nodes)[number]>();
+  for (const n of model.nodes) m.set(n.id, n);
   return m;
 }
 
-function buildDFG(events: Event[]): Map<string, { durations: number[]; count: number }> {
-  const byCase = groupByCase(events);
-  const dfg = new Map<string, { durations: number[]; count: number }>();
-
-  for (const arr of byCase.values()) {
-    for (let i = 0; i < arr.length - 1; i++) {
-      const a = arr[i];
-      const b = arr[i + 1];
-      const key = `${a.stepId}=>${b.stepId}`;
-      const dur = Math.max(0, b.tsMin - a.tsMin);
-      const cur = dfg.get(key) ?? { durations: [], count: 0 };
-      cur.durations.push(dur);
-      cur.count += 1;
-      dfg.set(key, cur);
-    }
-  }
-  return dfg;
+function genCaseId(i: number) {
+  return `CASE_${String(i + 1).padStart(4, "0")}`;
 }
 
-function computeEdgeStats(dfg: Map<string, { durations: number[]; count: number }>): Map<string, EdgeStats> {
-  const out = new Map<string, EdgeStats>();
-  for (const [k, v] of dfg.entries()) {
-    out.set(k, {
-      count: v.count,
-      avgMin: mean(v.durations),
-      p95Min: p95(v.durations),
+function simulateCase(
+  rng: () => number,
+  variant: Variant,
+  caseId: string,
+  baseModel: ProcessModel
+): EventRow[] {
+  const meta = activityMetaById(baseModel);
+
+  // Paramètres "réalistes" (minutes)
+  const dur = {
+    be_req: [60, 180],
+    be_cad: [240, 1200],
+    be_review: [30, 180],
+    bm_methods: [120, 480],
+    bm_pre_sim: [120, 600],
+    sim_setup: [60, 240],
+    sim_run: [120, 720],
+    sim_post: [60, 240],
+    decision: [15, 90],
+    proto: [240, 1440],
+    qualif: [120, 480],
+    release: [1, 5],
+  } as Record<string, [number, number]>;
+
+  const resources = {
+    BE: ["BE_A", "BE_B", "BE_C"],
+    BM: ["BM_A", "BM_B"],
+    SIMU: ["SIMU_A", "SIMU_B"],
+    PROTO: ["PROTO_A"],
+    QUALIF: ["QUAL_A"],
+    INDUS: ["INDUS_A"],
+    RELEASE: ["PLM_BOT"],
+  } as Record<Stage, string[]>;
+
+  const seqCore = [
+    "be_req",
+    "be_cad",
+    "be_review",
+    "bm_methods",
+    "bm_pre_sim",
+    "sim_setup",
+    "sim_run",
+    "sim_post",
+    "decision",
+    "proto",
+    "qualif",
+    "release",
+  ];
+
+  // AS-IS = plus de boucles (rework) et plus de problèmes de continuité/orga
+  const pRework = variant === "AS_IS" ? 0.55 : 0.25;
+  const pDataIssue = variant === "AS_IS" ? 0.30 : 0.12;
+  const pQualityIssue = variant === "AS_IS" ? 0.25 : 0.12;
+  const pOrgIssue = variant === "AS_IS" ? 0.22 : 0.08;
+  const pRiskIssue = variant === "AS_IS" ? 0.12 : 0.06;
+
+  let idx = 0;
+  let t = 0;
+  const rows: EventRow[] = [];
+
+  const pushAct = (activityId: string, issue: IssueFamily | null) => {
+    const metaN = meta.get(activityId);
+    if (!metaN) return;
+    const [a, b] = dur[activityId] ?? [30, 120];
+    // bruit
+    const d = a + Math.round((b - a) * rng());
+    const resource = pick(rng, resources[metaN.stage]);
+    rows.push({
+      caseId,
+      idx: idx++,
+      variant,
+      activityId,
+      activity: metaN.label.replace(/\n/g, " — "),
+      stage: metaN.stage,
+      tsMin: t,
+      durationMin: d,
+      resource,
+      tool: metaN.tool,
+      issue,
+    });
+    t += d;
+  };
+
+  // passe principale
+  for (const act of seqCore) {
+    let issue: IssueFamily | null = null;
+    if (act !== "release") {
+      if (maybe(rng, pDataIssue)) issue = "donnees_continuite";
+      else if (maybe(rng, pQualityIssue)) issue = "qualite_conformite";
+      else if (maybe(rng, pOrgIssue)) issue = "organisation_flux";
+      else if (maybe(rng, pRiskIssue)) issue = "risque";
+    }
+    pushAct(act, issue);
+
+    // décision : boucle si NOK
+    if (act === "decision" && maybe(rng, pRework)) {
+      // raison dominante = issue du dernier segment (sim_post) ou donnée
+      const r = rng();
+      const reason: IssueFamily =
+        r < 0.35
+          ? "qualite_conformite"
+          : r < 0.65
+          ? "donnees_continuite"
+          : r < 0.90
+          ? "organisation_flux"
+          : "risque";
+
+      // routes de rework
+      if (reason === "qualite_conformite") {
+        // retour BE CAO
+        pushAct("be_cad", reason);
+        pushAct("be_review", null);
+      } else if (reason === "donnees_continuite") {
+        // retour préparation simulation
+        pushAct("bm_pre_sim", reason);
+      } else if (reason === "organisation_flux") {
+        // retour méthodes ou BE
+        if (maybe(rng, 0.5)) pushAct("bm_methods", reason);
+        else pushAct("be_cad", reason);
+      } else {
+        // risque : passage par méthodes
+        pushAct("bm_methods", reason);
+      }
+
+      // boucle courte vers simu
+      pushAct("sim_setup", null);
+      pushAct("sim_run", null);
+      pushAct("sim_post", null);
+      pushAct("decision", null);
+
+      // si encore NOK, une boucle max supplémentaire
+      if (maybe(rng, variant === "AS_IS" ? 0.25 : 0.10)) {
+        pushAct("be_cad", "qualite_conformite");
+        pushAct("bm_pre_sim", "donnees_continuite");
+        pushAct("sim_run", null);
+        pushAct("sim_post", null);
+        pushAct("decision", null);
+      }
+    }
+  }
+
+  return rows;
+}
+
+export function simulatePairedLog(cfg: Partial<SimConfig> = {}) {
+  const c = { ...DEFAULT_SIM, ...cfg };
+  const rngA = seededRand(c.seed);
+  const rngB = seededRand(c.seed + 999);
+
+  const asIs: EventRow[] = [];
+  const toBe: EventRow[] = [];
+
+  for (let i = 0; i < c.nCases; i++) {
+    const caseId = genCaseId(i);
+    // volontairement deux RNG distincts => trajectoires différentes mais corrélées
+    asIs.push(...simulateCase(rngA, "AS_IS", caseId, AS_IS_MODEL));
+    toBe.push(...simulateCase(rngB, "TO_BE", caseId, TO_BE));
+  }
+
+  return { asIs, toBe };
+}
+
+// ------------------------------
+// Mining (DFG + stats + conformance)
+// ------------------------------
+
+export function buildDFG(log: EventRow[], variant: Variant): DFG {
+  const nodes = new Map<
+    string,
+    {
+      activityId: string;
+      activity: string;
+      stage: Stage;
+      countEvents: number;
+      countTraces: number;
+      issues: Record<IssueFamily, number>;
+    }
+  >();
+
+  const edgeAgg = new Map<
+    string,
+    {
+      from: string;
+      to: string;
+      durs: number[];
+      count: number;
+    }
+  >();
+
+  // group by case
+  const byCase = new Map<string, EventRow[]>();
+  for (const e of log) {
+    if (e.variant !== variant) continue;
+    const arr = byCase.get(e.caseId) ?? [];
+    arr.push(e);
+    byCase.set(e.caseId, arr);
+  }
+
+  for (const [caseId, events] of byCase.entries()) {
+    events.sort((a, b) => a.idx - b.idx);
+
+    // traces per node
+    const seenInCase = new Set<string>();
+
+    for (let i = 0; i < events.length; i++) {
+      const cur = events[i];
+
+      const n = nodes.get(cur.activityId) ?? {
+        activityId: cur.activityId,
+        activity: cur.activity,
+        stage: cur.stage,
+        countEvents: 0,
+        countTraces: 0,
+        issues: {
+          qualite_conformite: 0,
+          donnees_continuite: 0,
+          organisation_flux: 0,
+          risque: 0,
+        },
+      };
+
+      n.countEvents += 1;
+      if (cur.issue) n.issues[cur.issue] += 1;
+
+      nodes.set(cur.activityId, n);
+
+      if (!seenInCase.has(cur.activityId)) {
+        seenInCase.add(cur.activityId);
+      }
+
+      // edges
+      if (i < events.length - 1) {
+        const nxt = events[i + 1];
+        const key = `${cur.activityId}→${nxt.activityId}`;
+        const a = edgeAgg.get(key) ?? {
+          from: cur.activityId,
+          to: nxt.activityId,
+          durs: [],
+          count: 0,
+        };
+        // duration between activities: take next start - current start (approx)
+        const dt = Math.max(1, nxt.tsMin - cur.tsMin);
+        a.count += 1;
+        a.durs.push(dt);
+        edgeAgg.set(key, a);
+      }
+    }
+
+    // finalize traces per node
+    for (const actId of seenInCase) {
+      const n = nodes.get(actId);
+      if (n) n.countTraces += 1;
+    }
+  }
+
+  const edges = new Map<string, EdgeStats>();
+  for (const [k, a] of edgeAgg.entries()) {
+    const avg = mean(a.durs);
+    const p95 = percentile(a.durs, 95);
+    edges.set(k, {
+      from: a.from,
+      to: a.to,
+      count: a.count,
+      avgDurMin: avg,
+      p95DurMin: p95,
     });
   }
+
+  return { nodes, edges };
+}
+
+export function computeCaseLeadTimes(log: EventRow[], variant: Variant): CaseStats[] {
+  const byCase = new Map<string, EventRow[]>();
+  for (const e of log) {
+    if (e.variant !== variant) continue;
+    const arr = byCase.get(e.caseId) ?? [];
+    arr.push(e);
+    byCase.set(e.caseId, arr);
+  }
+
+  const allowed = modelAllowedEdgeSet(TO_BE);
+  const out: CaseStats[] = [];
+
+  for (const [caseId, events] of byCase.entries()) {
+    events.sort((a, b) => a.idx - b.idx);
+    const start = events[0]?.tsMin ?? 0;
+    const last = events[events.length - 1];
+    const end = (last?.tsMin ?? 0) + (last?.durationMin ?? 0);
+
+    let devEdges = 0;
+    let devTime = 0;
+
+    for (let i = 0; i < events.length - 1; i++) {
+      const a = events[i];
+      const b = events[i + 1];
+      const key = `${a.activityId}→${b.activityId}`;
+      if (!allowed.has(key)) {
+        devEdges += 1;
+        devTime += Math.max(1, b.tsMin - a.tsMin);
+      }
+    }
+
+    out.push({
+      caseId,
+      variant,
+      startMin: start,
+      endMin: end,
+      leadTimeMin: end - start,
+      deviationEdges: devEdges,
+      deviationTimeMin: devTime,
+    });
+  }
+
+  out.sort((a, b) => b.leadTimeMin - a.leadTimeMin);
   return out;
 }
 
-function computeConformanceSummary(dfg: Map<string, { durations: number[]; count: number }>, allowed: Set<string>): ConformanceSummary {
-  let total = 0;
-  let non = 0;
-  for (const [k, v] of dfg.entries()) {
-    total += v.count;
-    if (!allowed.has(k)) non += v.count;
+export function computeEdgeStats(dfg: DFG): EdgeStats[] {
+  const arr = Array.from(dfg.edges.values());
+  arr.sort((a, b) => b.count - a.count);
+  return arr;
+}
+
+export function computeResourcesAndCases(log: EventRow[], variant: Variant) {
+  const cases = new Set<string>();
+  const resources = new Map<string, number>();
+  for (const e of log) {
+    if (e.variant !== variant) continue;
+    cases.add(e.caseId);
+    resources.set(e.resource, (resources.get(e.resource) ?? 0) + 1);
   }
-  const conformPct = total === 0 ? 1 : (total - non) / total;
-  return { totalTransitions: total, nonConformTransitions: non, conformPct };
+  const resList = Array.from(resources.entries()).sort((a, b) => b[1] - a[1]);
+  return { caseCount: cases.size, resources: resList };
 }
 
-function computeDeviationTime(dfg: Map<string, { durations: number[]; count: number }>, allowed: Set<string>): number {
-  let sum = 0;
-  for (const [k, v] of dfg.entries()) {
-    if (!allowed.has(k)) sum += v.durations.reduce((a, b) => a + b, 0);
+export function pickDefaultFocus(cases: CaseStats[]) {
+  // pick worst lead time case
+  return cases[0]?.caseId ?? "";
+}
+
+// ------------------------------
+// Layout (simple columns + manual)
+// ------------------------------
+
+type ManualPos = Record<string, { x: number; y: number }>;
+
+export function buildStageColumns(width = 320) {
+  const xByStage = new Map<Stage, number>();
+  for (let i = 0; i < STAGE_COLUMNS.length; i++) {
+    xByStage.set(STAGE_COLUMNS[i], i * width);
   }
-  return sum;
+  return xByStage;
 }
 
-function computeCaseLeadTimes(events: Event[]): CaseLeadStats {
-  const byCase = groupByCase(events);
-  const leads: number[] = [];
-  for (const arr of byCase.values()) {
-    if (arr.length < 2) continue;
-    const lead = arr[arr.length - 1].tsMin - arr[0].tsMin;
-    leads.push(Math.max(0, lead));
+export function buildFullProcessGraph(model: ProcessModel, dfg?: DFG) {
+  const xByStage = buildStageColumns(320);
+  const nodes: Node<NodeData>[] = [];
+
+  // base nodes
+  const stageBuckets = new Map<Stage, typeof model.nodes>();
+  for (const n of model.nodes) {
+    const arr = stageBuckets.get(n.stage) ?? [];
+    arr.push(n);
+    stageBuckets.set(n.stage, arr);
   }
-  return { avgMin: mean(leads), p95Min: p95(leads) };
-}
 
-function computeLeadTimeDelta(asIs: Event[], toBe: Event[]): { avgDeltaMin: number; totalDays8h: number } {
-  const a = computeCaseLeadTimes(asIs);
-  const b = computeCaseLeadTimes(toBe);
-  const avgDeltaMin = Math.max(0, a.avgMin - b.avgMin);
-  const byCase = groupByCase(asIs);
-  const totalDays8h = (avgDeltaMin * byCase.size) / (60 * 8);
-  return { avgDeltaMin, totalDays8h };
-}
-
-function computeResourcesAndCases(events: Event[]): {
-  byStep: Record<StepId, { events: number; uniqueResources: number; cases: number }>;
-  totalCases: number;
-} {
-  const byCase = groupByCase(events);
-  const byStep: Record<StepId, { events: number; res: Set<string>; cases: Set<string> }> = {};
-
-  for (const [cid, arr] of byCase.entries()) {
-    const seenInCase = new Set<StepId>();
-    for (const ev of arr) {
-      const cur = byStep[ev.stepId] ?? { events: 0, res: new Set<string>(), cases: new Set<string>() };
-      cur.events += 1;
-      cur.res.add(ev.resource);
-      if (!seenInCase.has(ev.stepId)) cur.cases.add(cid);
-      byStep[ev.stepId] = cur;
-      seenInCase.add(ev.stepId);
+  for (const stage of STAGE_COLUMNS) {
+    const arr = stageBuckets.get(stage) ?? [];
+    for (let i = 0; i < arr.length; i++) {
+      const n = arr[i];
+      const stats = dfg?.nodes.get(n.id);
+      nodes.push({
+        id: n.id,
+        type: "activity",
+        position: {
+          x: xByStage.get(n.stage) ?? 0,
+          y: i * 140,
+        },
+        data: {
+          kind: "activity",
+          label: n.label,
+          stage: n.stage,
+          role: n.role,
+          tool: n.tool,
+          headcount: n.headcount,
+          traces: stats?.countTraces ?? 0,
+          eventsCount: stats?.countEvents ?? 0,
+          issues: stats?.issues ?? {
+            qualite_conformite: 0,
+            donnees_continuite: 0,
+            organisation_flux: 0,
+            risque: 0,
+          },
+        },
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+      });
     }
   }
 
-  const out: Record<StepId, { events: number; uniqueResources: number; cases: number }> = {};
-  for (const k of Object.keys(byStep)) {
-    out[k] = {
-      events: byStep[k].events,
-      uniqueResources: byStep[k].res.size,
-      cases: byStep[k].cases.size,
+  // edges
+  const edges: Edge[] = model.edges.map((e) => {
+    const key = `${e.from}→${e.to}`;
+    const stats = dfg?.edges.get(key);
+    return {
+      id: key,
+      source: e.from,
+      target: e.to,
+      type: "smoothstep",
+      markerEnd: { type: MarkerType.ArrowClosed },
+      data: { stats },
     };
-  }
+  });
 
-  return { byStep: out, totalCases: byCase.size };
+  return { nodes, edges };
 }
 
-function computeTraces(events: Event[], maxTraces = 8): Trace[] {
-  const byCase = groupByCase(events);
-  const map = new Map<string, { steps: StepId[]; count: number; leads: number[] }>();
-
-  for (const arr of byCase.values()) {
-    const steps = arr.map((e) => e.stepId);
-    const sig = steps.join("→");
-    const lead = arr.length < 2 ? 0 : Math.max(0, arr[arr.length - 1].tsMin - arr[0].tsMin);
-    const cur = map.get(sig) ?? { steps, count: 0, leads: [] };
-    cur.count += 1;
-    cur.leads.push(lead);
-    map.set(sig, cur);
-  }
-
-  const traces: Trace[] = [];
-  for (const [sig, v] of map.entries()) {
-    traces.push({
-      signature: sig,
-      steps: v.steps,
-      count: v.count,
-      avgLeadMin: mean(v.leads),
-      p95LeadMin: p95(v.leads),
-    });
-  }
-
-  traces.sort((a, b) => b.count - a.count);
-  return traces.slice(0, maxTraces);
+export function applyManualPositions(nodes: Node<NodeData>[], manual: ManualPos) {
+  return nodes.map((n) => {
+    const m = manual[n.id];
+    if (!m) return n;
+    return { ...n, position: { x: m.x, y: m.y } };
+  });
 }
 
-function pickDefaultFocus(events: Event[]): StepId {
-  const freq = new Map<StepId, number>();
-  for (const ev of events) freq.set(ev.stepId, (freq.get(ev.stepId) ?? 0) + 1);
-  let best: StepId = "flow_zoom";
-  let bestN = -1;
-  for (const [k, v] of freq.entries()) {
-    if (v > bestN) {
-      best = k;
-      bestN = v;
-    }
-  }
-  return best;
+export function nearestStageX(stage: Stage) {
+  return buildStageColumns(320).get(stage) ?? 0;
 }
 
-// -------------------- Playback (token animation) --------------------
+// ------------------------------
+// Playback (token animation)
+// ------------------------------
 
-type Segment = { a: Pos; b: Pos; len: number; from: StepId; to: StepId };
+type Segment = { a: { x: number; y: number }; b: { x: number; y: number }; len: number };
 
-function computePlaybackSegments(traceSteps: StepId[], pos: Record<string, Pos>): Segment[] {
+type PlaybackTrace = {
+  caseId: string;
+  activities: string[]; // activityIds in order
+};
+
+export function computePlaybackTrace(log: EventRow[], variant: Variant, caseId: string): PlaybackTrace {
+  const ev = log
+    .filter((e) => e.variant === variant && e.caseId === caseId)
+    .sort((a, b) => a.idx - b.idx);
+  return { caseId, activities: ev.map((e) => e.activityId) };
+}
+
+export function computePlaybackSegments(trace: PlaybackTrace, nodes: Node<NodeData>[]) {
+  const pos = new Map<string, { x: number; y: number }>();
+  for (const n of nodes) {
+    // centers (approx)
+    pos.set(n.id, { x: n.position.x + 140, y: n.position.y + 36 });
+  }
+
+  const pts: { x: number; y: number }[] = [];
+  for (const id of trace.activities) {
+    const p = pos.get(id);
+    if (p) pts.push(p);
+  }
+
   const segs: Segment[] = [];
-  for (let i = 0; i < traceSteps.length - 1; i++) {
-    const from = traceSteps[i];
-    const to = traceSteps[i + 1];
-    const pa = pos[from] ?? { x: 0, y: 0 };
-    const pb = pos[to] ?? { x: 0, y: 0 };
-    const a = { x: pa.x + 110, y: pa.y + 30 };
-    const b = { x: pb.x + 110, y: pb.y + 30 };
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
-    segs.push({ a, b, len: Math.max(1, len), from, to });
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.max(1, Math.hypot(dx, dy));
+    segs.push({ a, b, len });
   }
-  return segs;
+
+  return { pts, segs };
 }
 
-function posOnSegment(seg: Segment, t01: number): Pos {
-  const t = clamp01(t01);
+export function posOnSegment(seg: Segment, t: number) {
+  const u = clamp(t, 0, 1);
   return {
-    x: seg.a.x + (seg.b.x - seg.a.x) * t,
-    y: seg.a.y + (seg.b.y - seg.a.y) * t,
+    x: seg.a.x + (seg.b.x - seg.a.x) * u,
+    y: seg.a.y + (seg.b.y - seg.a.y) * u,
   };
 }
+// ------------------------------
+// UI Components (nodes, panels)
+// ------------------------------
 
-function computePlaybackTrace(events: Event[], preferredCaseId?: string): { caseId: string; steps: StepId[] } | null {
-  const byCase = groupByCase(events);
-  let cid = preferredCaseId;
-  if (!cid || !byCase.has(cid)) {
-    // pick a random-ish but deterministic first case
-    const keys = [...byCase.keys()].sort();
-    cid = keys[0];
-  }
-  const arr = byCase.get(cid!);
-  if (!arr || arr.length < 2) return null;
-  return { caseId: cid!, steps: arr.map((e) => e.stepId) };
+function badgeText(k: IssueFamily) {
+  return ISSUE_FAMILIES[k].short;
 }
 
-// -------------------- ReactFlow Nodes --------------------
+function issueTitle(k: IssueFamily) {
+  return ISSUE_FAMILIES[k].label;
+}
 
-function ActivityNode(props: NodeProps<{ step: Step; stats?: { events: number; cases: number; uniqueResources: number } }>) {
-  const { data, selected } = props;
-  const st = data.step;
-  const stats = data.stats;
+function sumIssues(issues?: Record<IssueFamily, number>) {
+  if (!issues) return 0;
+  return (
+    (issues.qualite_conformite ?? 0) +
+    (issues.donnees_continuite ?? 0) +
+    (issues.organisation_flux ?? 0) +
+    (issues.risque ?? 0)
+  );
+}
+
+function ActivityNode({ data, selected }: { data: ActivityNodeData; selected: boolean }) {
+  const issuesTotal = sumIssues(data.issues);
 
   return (
     <div
       style={{
-        width: 220,
-        borderRadius: 10,
-        border: selected ? "2px solid #111" : "1px solid #d0d0d0",
+        width: 280,
+        borderRadius: 14,
+        border: selected ? "2px solid #111" : "1px solid #cfcfcf",
         background: "#fff",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.06)",
-        padding: 10,
+        boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
+        overflow: "hidden",
+        userSelect: "none",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
-        <div style={{ fontWeight: 650, fontSize: 13, lineHeight: 1.15 }}>{st.label}</div>
-        <div
-          title="Effectif (référence)"
-          style={{
-            fontSize: 12,
-            padding: "2px 8px",
-            borderRadius: 999,
-            background: "#f3f3f3",
-            border: "1px solid #e6e6e6",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {st.headcount} pers.
-        </div>
+      <div
+        style={{
+          padding: "10px 12px",
+          background: selected ? "#111" : "#f6f6f6",
+          color: selected ? "#fff" : "#111",
+          fontSize: 12,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>{data.stage}</div>
+        <div style={{ opacity: selected ? 0.9 : 0.7, fontWeight: 600 }}>{data.role}</div>
       </div>
 
-      <div style={{ marginTop: 6, fontSize: 12, color: "#444" }}>{st.tool}</div>
-
-      {stats ? (
-        <div style={{ marginTop: 8, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-          <div style={{ fontSize: 11, color: "#333" }}>
-            <div style={{ color: "#777" }}>events</div>
-            <div style={{ fontWeight: 650 }}>{stats.events}</div>
-          </div>
-          <div style={{ fontSize: 11, color: "#333" }}>
-            <div style={{ color: "#777" }}>cas</div>
-            <div style={{ fontWeight: 650 }}>{stats.cases}</div>
-          </div>
-          <div style={{ fontSize: 11, color: "#333" }}>
-            <div style={{ color: "#777" }}>ressources</div>
-            <div style={{ fontWeight: 650 }}>{stats.uniqueResources}</div>
-          </div>
+      <div style={{ padding: "10px 12px" }}>
+        <div style={{ fontWeight: 800, fontSize: 13, lineHeight: 1.25, marginBottom: 6 }}>
+          {data.label}
         </div>
-      ) : null}
 
-      <div style={{ marginTop: 8, fontSize: 11, color: "#777" }}>{st.stage}</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {data.tool ? (
+            <span
+              style={{
+                fontSize: 11,
+                padding: "3px 8px",
+                borderRadius: 999,
+                border: "1px solid #e3e3e3",
+                background: "#fafafa",
+              }}
+            >
+              {data.tool}
+            </span>
+          ) : null}
+
+          <span
+            style={{
+              fontSize: 11,
+              padding: "3px 8px",
+              borderRadius: 999,
+              border: "1px solid #e3e3e3",
+              background: "#fafafa",
+            }}
+            title="Effectif estimé sur l'activité"
+          >
+            👥 {data.headcount}
+          </span>
+
+          <span
+            style={{
+              fontSize: 11,
+              padding: "3px 8px",
+              borderRadius: 999,
+              border: "1px solid #e3e3e3",
+              background: "#fafafa",
+            }}
+            title="Nombre de traces qui passent par cette activité"
+          >
+            🧾 {data.traces ?? 0}
+          </span>
+
+          <span
+            style={{
+              fontSize: 11,
+              padding: "3px 8px",
+              borderRadius: 999,
+              border: "1px solid #e3e3e3",
+              background: "#fafafa",
+            }}
+            title="Nombre d'events (actions) agrégés"
+          >
+            ⚡ {data.eventsCount ?? 0}
+          </span>
+        </div>
+
+        {issuesTotal > 0 ? (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {(Object.keys(ISSUE_FAMILIES) as IssueFamily[]).map((k) => {
+              const v = data.issues?.[k] ?? 0;
+              if (!v) return null;
+              return (
+                <span
+                  key={k}
+                  title={`${issueTitle(k)}: ${v}`}
+                  style={{
+                    fontSize: 11,
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    border: "1px solid #ddd",
+                    background: "#fff",
+                  }}
+                >
+                  {badgeText(k)} {v}
+                </span>
+              );
+            })}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, opacity: 0.6 }}>
+            Aucun incident détecté sur cette activité.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -750,753 +1014,685 @@ function TokenNode() {
         height: 16,
         borderRadius: 999,
         background: "#111",
+        boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
         border: "2px solid #fff",
-        boxShadow: "0 2px 8px rgba(0,0,0,0.25)",
       }}
     />
   );
 }
 
-const nodeTypes = { activity: ActivityNode, token: TokenNode };
+const nodeTypes = {
+  activity: ({ data, selected }: any) => <ActivityNode data={data as ActivityNodeData} selected={selected} />,
+  token: () => <TokenNode />,
+};
 
-// -------------------- Main Component --------------------
+function edgeLabelFromStats(stats?: EdgeStats, mode: LabelMode = "avg+p95") {
+  if (!stats || mode === "none") return "";
+  if (mode === "count") return `${stats.count}`;
+  if (mode === "avg") return `moy ${fmtHoursFromMin(stats.avgDurMin)}`;
+  if (mode === "p95") return `p95 ${fmtHoursFromMin(stats.p95DurMin)}`;
+  return `${stats.count} • moy ${fmtHoursFromMin(stats.avgDurMin)} • p95 ${fmtHoursFromMin(stats.p95DurMin)}`;
+}
+
+function safeLocalStorageGet(key: string) {
+  try {
+    if (typeof window === "undefined") return null;
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key: string, value: string) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+// ------------------------------
+// Main Component
+// ------------------------------
 
 export default function ProcessExplorer() {
-  const rf = useReactFlow();
-  const rfInstanceRef = useRef<ReactFlowInstance | null>(null);
+  const [mounted, setMounted] = useState(false);
 
+  // UI state
+  const [variant, setVariant] = useState<Variant>("AS_IS");
   const [tab, setTab] = useState<Tab>("events");
   const [labelMode, setLabelMode] = useState<LabelMode>("avg+p95");
-  const [mode, setMode] = useState<"asIs" | "toBe">("asIs");
+  const [showIssues, setShowIssues] = useState(true);
 
-  const [knobs, setKnobs] = useState<SimKnobs>({
-    cases: 200,
-    seed: 7,
-    skipGatesPct: 0.35,
-    manualTransferPct: 0.25,
-    uncontrolledLoopsPct: 0.35,
+  // Simulation
+  const [simCfg, setSimCfg] = useState<SimConfig>({ nCases: 40, seed: 42 });
+  const [{ asIs, toBe }, setLog] = useState(() => simulatePairedLog(simCfg));
+
+  // Mining
+  const dfgAsIs = useMemo(() => buildDFG(asIs, "AS_IS"), [asIs]);
+  const dfgToBe = useMemo(() => buildDFG(toBe, "TO_BE"), [toBe]);
+
+  const dfg = variant === "AS_IS" ? dfgAsIs : dfgToBe;
+  const model = variant === "AS_IS" ? AS_IS_MODEL : TO_BE;
+
+  const caseStats = useMemo(() => {
+    return computeCaseLeadTimes(variant === "AS_IS" ? asIs : toBe, variant);
+  }, [asIs, toBe, variant]);
+
+  const { caseCount, resources } = useMemo(() => {
+    return computeResourcesAndCases(variant === "AS_IS" ? asIs : toBe, variant);
+  }, [asIs, toBe, variant]);
+
+  const defaultFocus = useMemo(() => pickDefaultFocus(caseStats), [caseStats]);
+
+  // Selected
+  const [focusCaseId, setFocusCaseId] = useState<string>(defaultFocus);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>("be_cad");
+
+  // Manual layout persistence
+  const LS_KEY = "pm_manual_pos_v1";
+  const [manualPos, setManualPos] = useState<ManualPos>(() => {
+    const raw = safeLocalStorageGet(LS_KEY);
+    if (!raw) return {};
+    try {
+      return JSON.parse(raw) as ManualPos;
+    } catch {
+      return {};
+    }
   });
 
-  // Manual positions remembered (drag)
-  const [manualPos, setManualPos] = useState<Record<string, Pos>>({});
-  const [lockColumns, setLockColumns] = useState<boolean>(true);
+  // Build graph
+  const baseGraph = useMemo(() => {
+    return buildFullProcessGraph(model, dfg);
+  }, [model, dfg]);
 
-  // Focus (selected node)
-  const [focus, setFocus] = useState<StepId>("flow_zoom");
+  const [rfNodes, setRfNodes] = useState<Node<NodeData>[]>(() => {
+    const n = applyManualPositions(baseGraph.nodes, manualPos);
+    // token node off-screen initial
+    return [
+      ...n,
+      {
+        id: "__token__",
+        type: "token",
+        position: { x: -10_000, y: -10_000 },
+        data: { kind: "token" },
+        draggable: false,
+        selectable: false,
+      },
+    ];
+  });
 
-  // Simulation data (AS-IS / TO-BE)
-  const sim = useMemo(() => simulatePairedLog(knobs), [knobs]);
+  const [rfEdges, setRfEdges] = useState<Edge[]>(() => {
+    return baseGraph.edges.map((e) => ({
+      ...e,
+      label: edgeLabelFromStats((e.data as any)?.stats, labelMode),
+      labelStyle: { fontSize: 11, fontWeight: 700 },
+      style: { strokeWidth: 2 },
+    }));
+  });
+
+  // Refresh when model/dfg changes
   useEffect(() => {
-    // reset default focus when simulation changes
-    setFocus(sim.focusDefault ?? pickDefaultFocus(sim.asIs));
-  }, [sim.focusDefault]);
+    const built = buildFullProcessGraph(model, dfg);
+    const nodes = applyManualPositions(built.nodes, manualPos);
 
-  const activeEvents = mode === "asIs" ? sim.asIs : sim.toBe;
+    setRfNodes((prev) => {
+      const token = prev.find((n) => n.id === "__token__");
+      const tokenNode: Node<NodeData> =
+        token ??
+        ({
+          id: "__token__",
+          type: "token",
+          position: { x: -10_000, y: -10_000 },
+          data: { kind: "token" },
+          draggable: false,
+          selectable: false,
+        } as any);
 
-  const allowedSet = useMemo(() => buildAllowedEdgeSet(), []);
-  const dfg = useMemo(() => buildDFG(activeEvents), [activeEvents]);
-  const edgeStats = useMemo(() => computeEdgeStats(dfg), [dfg]);
-
-  const conf = useMemo(() => computeConformanceSummary(dfg, allowedSet), [dfg, allowedSet]);
-  const lead = useMemo(() => computeCaseLeadTimes(activeEvents), [activeEvents]);
-  const impact = useMemo(() => computeLeadTimeDelta(sim.asIs, sim.toBe), [sim.asIs, sim.toBe]);
-  const deviationTimeMin = useMemo(() => computeDeviationTime(dfg, allowedSet), [dfg, allowedSet]);
-
-  const resources = useMemo(() => computeResourcesAndCases(activeEvents), [activeEvents]);
-  const traces = useMemo(() => computeTraces(activeEvents, 10), [activeEvents]);
-
-  // Stage columns
-  const stageX = useMemo(() => buildStageColumns(), []);
-  const stageXs = useMemo(() => STAGE_ORDER.map((s) => stageX[s]), [stageX]);
-
-  // Build flow nodes/edges
-  const basePos = useMemo(() => buildInitialPositions(manualPos), [manualPos]);
-
-  const baseNodes = useMemo(() => {
-    const nodes: Node[] = STEPS.map((st) => {
-      const stats = resources.byStep[st.id];
-      return {
-        id: st.id,
-        type: "activity",
-        position: basePos[st.id] ?? { x: 0, y: 0 },
-        data: { step: st, stats },
-        draggable: true,
-      } as Node;
+      return [...nodes, tokenNode];
     });
 
-    // token node (animated)
-    nodes.push({
-      id: "__token__",
-      type: "token",
-      position: { x: stageX["Simulation"] + 110, y: 20 },
-      data: {},
-      draggable: false,
-      selectable: false,
-      connectable: false,
-      hidden: false,
-    } as Node);
+    setRfEdges(
+      built.edges.map((e) => ({
+        ...e,
+        label: edgeLabelFromStats((e.data as any)?.stats, labelMode),
+        labelStyle: { fontSize: 11, fontWeight: 700 },
+        style: { strokeWidth: 2 },
+      }))
+    );
+  }, [model, dfg, manualPos, labelMode]);
 
-    return resolveOverlaps(nodes);
-  }, [basePos, resources.byStep, stageX]);
-
-  const baseEdges = useMemo(() => {
-    const edges: Edge[] = LINKS.map((e) => {
-      const key = `${e.from}=>${e.to}`;
-      const st = edgeStats.get(key);
-
-      const label = (() => {
-        if (labelMode === "none") return e.artifact ?? "";
-        const parts: string[] = [];
-        if (e.artifact) parts.push(e.artifact);
-        if (st) {
-          if (labelMode === "count") parts.push(`${st.count}`);
-          if (labelMode === "avg") parts.push(`avg ${formatHoursFromMin(st.avgMin)}`);
-          if (labelMode === "p95") parts.push(`p95 ${formatHoursFromMin(st.p95Min)}`);
-          if (labelMode === "avg+p95") parts.push(`avg ${formatHoursFromMin(st.avgMin)} · p95 ${formatHoursFromMin(st.p95Min)}`);
-        }
-        return parts.join(" · ");
-      })();
-
-      const isNonConform = mode === "asIs" && !allowedSet.has(key);
-
-      return {
-        id: e.id,
-        source: e.from,
-        target: e.to,
-        type: "smoothstep",
-        label,
-        labelStyle: { fontSize: 11, fill: "#333" },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-        style: {
-          stroke: isNonConform ? "#d11" : "#999",
-          strokeWidth: isNonConform ? 2.2 : 1.4,
-        },
-        data: {
-          allowed: e.allowed,
-          nonConform: isNonConform,
-          key,
-        },
-      } as Edge;
-    });
-
-    return edges;
-  }, [edgeStats, labelMode, allowedSet, mode]);
-
-  const [rfNodes, setRfNodes] = useState<Node[]>(baseNodes);
-  const [rfEdges, setRfEdges] = useState<Edge[]>(baseEdges);
-
-  // When base changes (simulation/layout), refresh nodes/edges but keep manualPos
+  // Mount guard (avoid SSR/prerender issues)
   useEffect(() => {
-    setRfNodes(baseNodes);
-  }, [baseNodes]);
-  useEffect(() => {
-    setRfEdges(baseEdges);
-  }, [baseEdges]);
-
-  // NodeChange is a union; not all variants have `id`.
-  const getChangeId = useCallback((c: NodeChange): string | undefined => {
-    const anyC = c as any;
-    if (typeof anyC?.id === "string") return anyC.id;
-    if (c.type === "add" && typeof anyC?.item?.id === "string") return anyC.item.id;
-    return undefined;
+    setMounted(true);
   }, []);
 
+  // Persist manual positions
+  useEffect(() => {
+    safeLocalStorageSet(LS_KEY, JSON.stringify(manualPos));
+  }, [manualPos]);
+
+  // Sync focus case
+  useEffect(() => {
+    if (!focusCaseId) setFocusCaseId(defaultFocus);
+  }, [defaultFocus, focusCaseId]);
+
+  // Changes handlers
   const onNodesChange = useCallback(
     (changes: NodeChange[]) => {
-      // Ignore token changes in user interactions
-      const useful = changes.filter((c) => getChangeId(c) !== "__token__");
+      // Filter out token changes (NodeChange union doesn't always have id)
+      const useful = changes.filter((c) => !("id" in c && c.id === "__token__"));
+
       setRfNodes((nds) => applyNodeChanges(useful, nds));
 
+      // Persist drag positions
       setManualPos((prev) => {
         let next = prev;
-        for (const ch of useful) {
-          const id = getChangeId(ch);
-          if (!id) continue;
-
-          if (ch.type === "position" && (ch as any).position) {
-            const p = (ch as any).position as Pos;
-            const px = lockColumns ? nearestStageX(p.x, stageXs) : p.x;
-            if (next === prev) next = { ...prev };
-            next[id] = { x: px, y: p.y };
-          }
-
-          if (ch.type === "remove") {
-            if (next === prev) next = { ...prev };
-            delete next[id];
+        for (const c of useful) {
+          if (!("id" in c)) continue;
+          if (c.type === "position" && (c as any).position) {
+            const pos = (c as any).position as { x: number; y: number };
+            if (!next) next = {};
+            next = { ...next, [c.id]: { x: pos.x, y: pos.y } };
           }
         }
         return next;
       });
     },
-    [getChangeId, lockColumns, stageXs]
+    [setRfNodes]
   );
 
   const onEdgesChange = useCallback((changes: EdgeChange[]) => {
     setRfEdges((eds) => applyEdgeChanges(changes, eds));
   }, []);
 
-  const onConnect: OnConnect = useCallback(
-    (connection: Connection) => {
-      // not used (graph is reference-based) but keep safe
-      setRfEdges((eds) =>
-        addEdge(
-          {
-            ...connection,
-            type: "smoothstep",
-            markerEnd: { type: MarkerType.ArrowClosed },
-            style: { stroke: "#999" },
-          },
-          eds
-        )
-      );
-    },
-    []
-  );
-
-  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+  const onNodeClick = useCallback((_evt: any, node: Node<NodeData>) => {
     if (node.id === "__token__") return;
-    setFocus(node.id);
+    setSelectedNodeId(node.id);
+    setTab("events");
   }, []);
 
-  // Center on focus
+  // ------------------------------
+  // Token animation
+  // ------------------------------
+
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1.0); // 0.25..3
+
+  const rafRef = useRef<number | null>(null);
+  const progRef = useRef<{ segIdx: number; segT: number }>({ segIdx: 0, segT: 0 });
+
+  const replay = useCallback(() => {
+    progRef.current = { segIdx: 0, segT: 0 };
+  }, []);
+
   useEffect(() => {
-    const inst = rfInstanceRef.current;
-    if (!inst) return;
-    const n = rfNodes.find((x) => x.id === focus);
-    if (!n) return;
-    inst.setCenter(n.position.x + 110, n.position.y + 30, { zoom: 0.9, duration: 300 });
-  }, [focus]);
-
-  // Playback selection
-  const [playCaseId, setPlayCaseId] = useState<string | undefined>(undefined);
-  const [playing, setPlaying] = useState<boolean>(true);
-
-  // Build playback segments based on current node positions
-  const playback = useMemo(() => {
-    const trace = computePlaybackTrace(activeEvents, playCaseId);
-    if (!trace) return null;
-
-    const pos: Record<string, Pos> = {};
-    for (const n of rfNodes) {
-      pos[n.id] = { x: n.position.x, y: n.position.y };
+    if (!mounted) return;
+    if (!playing) {
+      // hide token
+      setRfNodes((prev) =>
+        prev.map((n) =>
+          n.id === "__token__" ? { ...n, position: { x: -10_000, y: -10_000 } } : n
+        )
+      );
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      return;
     }
 
-    const segments = computePlaybackSegments(trace.steps, pos);
-    const totalLen = segments.reduce((a, s) => a + s.len, 0);
-    return { trace, segments, totalLen };
-  }, [activeEvents, playCaseId, rfNodes]);
+    const trace = computePlaybackTrace(variant === "AS_IS" ? asIs : toBe, variant, focusCaseId);
+    const { segs } = computePlaybackSegments(trace, rfNodes);
 
-  // Animate token node along segments
-  const animRef = useRef<number | null>(null);
-  const tRef = useRef<number>(0);
+    if (segs.length === 0) return;
 
-  useEffect(() => {
-    if (!playback || !playing) return;
+    const step = () => {
+      const st = progRef.current;
+      const seg = segs[clamp(st.segIdx, 0, segs.length - 1)];
 
-    const speed = 220; // px per second (visual)
+      // advance by approx pixels per frame
+      const pxPerFrame = 6 * speed;
+      const dt = pxPerFrame / seg.len;
+      let t = st.segT + dt;
+      let i = st.segIdx;
 
-    const tick = (ts: number) => {
-      if (!playback) return;
-
-      // Convert ts to progression using delta-time
-      if (!tRef.current) tRef.current = ts;
-      const dt = Math.min(60, ts - tRef.current);
-      tRef.current = ts;
-
-      const dist = (dt / 1000) * speed;
-
-      // Store progress as cumulative distance in a ref
-      const progKey = "__prog__" as const;
-      const anyObj = (tick as any);
-      const prevDist = typeof anyObj[progKey] === "number" ? (anyObj[progKey] as number) : 0;
-      let nextDist = prevDist + dist;
-      if (playback.totalLen > 0) nextDist = nextDist % playback.totalLen;
-      anyObj[progKey] = nextDist;
-
-      // Find segment
-      let remain = nextDist;
-      let seg = playback.segments[0];
-      for (const s of playback.segments) {
-        if (remain <= s.len) {
-          seg = s;
-          break;
-        }
-        remain -= s.len;
+      while (t >= 1 && i < segs.length - 1) {
+        t = t - 1;
+        i += 1;
       }
-      const t01 = seg.len <= 0 ? 0 : remain / seg.len;
-      const p = posOnSegment(seg, t01);
 
-      setRfNodes((nds) =>
-        nds.map((n) => (n.id === "__token__" ? { ...n, position: { x: p.x - 8, y: p.y - 8 } } : n))
+      if (i === segs.length - 1 && t >= 1) {
+        // loop
+        i = 0;
+        t = 0;
+      }
+
+      progRef.current = { segIdx: i, segT: t };
+      const segNow = segs[i];
+      const p = posOnSegment(segNow, t);
+
+      setRfNodes((prev) =>
+        prev.map((n) =>
+          n.id === "__token__"
+            ? {
+                ...n,
+                position: { x: p.x - 8, y: p.y - 8 },
+              }
+            : n
+        )
       );
 
-      animRef.current = requestAnimationFrame(tick);
+      rafRef.current = requestAnimationFrame(step);
     };
 
-    animRef.current = requestAnimationFrame(tick);
+    rafRef.current = requestAnimationFrame(step);
+
     return () => {
-      if (animRef.current) cancelAnimationFrame(animRef.current);
-      animRef.current = null;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
     };
-  }, [playback, playing]);
+  }, [mounted, playing, speed, rfNodes, variant, focusCaseId, asIs, toBe]);
 
-  const focusEvents = useMemo(() => {
-    return activeEvents
-      .filter((e) => e.stepId === focus)
-      .sort((a, b) => a.tsMin - b.tsMin)
-      .slice(0, 250);
-  }, [activeEvents, focus]);
+  // ------------------------------
+  // Panels data
+  // ------------------------------
 
-  const focusLabel = useMemo(() => {
-    const st = STEPS.find((s) => s.id === focus);
-    return st ? `${st.label} — ${st.tool}` : focus;
-  }, [focus]);
+  const selectedNode = useMemo(() => {
+    return rfNodes.find((n) => n.id === selectedNodeId) as Node<ActivityNodeData> | undefined;
+  }, [rfNodes, selectedNodeId]);
 
-  // -------------------- UI --------------------
+  const nodeEvents = useMemo(() => {
+    const log = variant === "AS_IS" ? asIs : toBe;
+    const events = log
+      .filter((e) => e.variant === variant && e.activityId === selectedNodeId)
+      .sort((a, b) => a.tsMin - b.tsMin);
 
-  const Card = ({ title, value, sub }: { title: string; value: React.ReactNode; sub?: React.ReactNode }) => (
-    <div
-      style={{
-        border: "1px solid #e6e6e6",
-        borderRadius: 14,
-        padding: 14,
-        background: "#fff",
-        boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
-        minHeight: 74,
-      }}
-    >
-      <div style={{ fontSize: 12, color: "#666" }}>{title}</div>
-      <div style={{ fontSize: 22, fontWeight: 750, marginTop: 6, lineHeight: 1.1 }}>{value}</div>
-      {sub ? <div style={{ marginTop: 6, fontSize: 12, color: "#777" }}>{sub}</div> : null}
-    </div>
-  );
+    // optional: focus case highlight
+    return events;
+  }, [variant, asIs, toBe, selectedNodeId]);
 
-  const Pill = ({ active, children, onClick }: { active?: boolean; children: React.ReactNode; onClick: () => void }) => (
-    <button
-      onClick={onClick}
-      style={{
-        borderRadius: 999,
-        padding: "7px 12px",
-        border: active ? "1px solid #111" : "1px solid #e0e0e0",
-        background: active ? "#111" : "#fff",
-        color: active ? "#fff" : "#111",
-        fontSize: 12,
-        fontWeight: 650,
-        cursor: "pointer",
-      }}
-      type="button"
-    >
-      {children}
-    </button>
-  );
+  const focusTraceEvents = useMemo(() => {
+    const log = variant === "AS_IS" ? asIs : toBe;
+    return log
+      .filter((e) => e.variant === variant && e.caseId === focusCaseId)
+      .sort((a, b) => a.idx - b.idx);
+  }, [variant, asIs, toBe, focusCaseId]);
 
-  const Slider = ({
-    label,
-    value,
-    min,
-    max,
-    step,
-    onChange,
-    right,
-  }: {
-    label: string;
-    value: number;
-    min: number;
-    max: number;
-    step: number;
-    onChange: (v: number) => void;
-    right?: React.ReactNode;
-  }) => (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
-        <div style={{ fontSize: 12, color: "#666" }}>{label}</div>
-        <div style={{ fontSize: 12, color: "#666" }}>{right}</div>
+  const edgeStatsTop = useMemo(() => computeEdgeStats(dfg).slice(0, 12), [dfg]);
+
+  const allowed = useMemo(() => modelAllowedEdgeSet(TO_BE), []);
+
+  // Decorate edges with deviation (AS-IS vs TO-BE)
+  const decoratedEdges = useMemo(() => {
+    return rfEdges.map((e) => {
+      const key = `${e.source}→${e.target}`;
+      const dev = variant === "AS_IS" ? !allowed.has(key) : false;
+      return {
+        ...e,
+        animated: dev,
+        style: {
+          ...(e.style ?? {}),
+          stroke: dev ? "#c1121f" : "#111",
+          strokeDasharray: dev ? "6 4" : undefined,
+          opacity: dev ? 0.95 : 0.75,
+        },
+        label: edgeLabelFromStats((e.data as any)?.stats, labelMode),
+      } as Edge;
+    });
+  }, [rfEdges, allowed, variant, labelMode]);
+
+  // Run simulation
+  const runSim = useCallback(() => {
+    const next = simulatePairedLog(simCfg);
+    setLog(next);
+    setFocusCaseId("");
+    setSelectedNodeId("be_cad");
+    setPlaying(false);
+    replay();
+  }, [simCfg, replay]);
+
+  // Reset layout
+  const resetLayout = useCallback(() => {
+    setManualPos({});
+  }, []);
+
+  // ------------------------------
+  // Render
+  // ------------------------------
+
+  // Placeholder during prerender to avoid ReactFlow SSR issues.
+  if (!mounted) {
+    return (
+      <div style={{ padding: 16, fontFamily: "system-ui, Arial" }}>
+        Chargement du Process Explorer…
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        style={{ width: "100%" }}
-      />
-    </div>
-  );
-
-  const TopBar = (
-    <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between" }}>
-      <div>
-        <div style={{ fontSize: 18, fontWeight: 800 }}>Process Explorer</div>
-        <div style={{ fontSize: 12, color: "#666", marginTop: 2 }}>
-          Mode AS-IS — rouge = transition non conforme au TO-BE.
-        </div>
-      </div>
-
-      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-        <Pill active={mode === "asIs"} onClick={() => setMode("asIs")}>AS-IS (simulé)</Pill>
-        <Pill active={mode === "toBe"} onClick={() => setMode("toBe")}>TO-BE (référence)</Pill>
-        <button
-          type="button"
-          onClick={() => setKnobs((k) => ({ ...k, seed: k.seed + 1 }))}
-          style={{
-            borderRadius: 10,
-            padding: "8px 12px",
-            border: "1px solid #e0e0e0",
-            background: "#fff",
-            cursor: "pointer",
-            fontSize: 12,
-            fontWeight: 650,
-          }}
-        >
-          Régénérer
-        </button>
-      </div>
-    </div>
-  );
-
-  const leftControls = (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
-      <Card title="Focus" value={STEPS.find((s) => s.id === focus)?.label ?? focus} sub={<span>Cliquez un nœud pour recentrer</span>} />
-      <Card
-        title="Conformance (AS-IS vs TO-BE)"
-        value={formatPct(conf.conformPct)}
-        sub={
-          <span>
-            {conf.nonConformTransitions}/{conf.totalTransitions} transitions hors modèle
-          </span>
-        }
-      />
-      <Card title="Lead time" value={`${formatHoursFromMin(lead.avgMin)} avg`} sub={<span>p95 {formatHoursFromMin(lead.p95Min)}</span>} />
-      <Card
-        title="Impact vs TO-BE"
-        value={`${formatHoursFromMin(impact.avgDeltaMin)} avg/case`}
-        sub={<span>total {impact.totalDays8h.toFixed(1)} j (8h)</span>}
-      />
-      <Card title="Déviations (temps cumulé)" value={formatHoursFromMin(deviationTimeMin)} sub={<span>sur transitions hors TO-BE</span>} />
-      <Card
-        title="Playback"
-        value={
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              type="button"
-              onClick={() => setPlaying((p) => !p)}
-              style={{
-                borderRadius: 10,
-                padding: "7px 10px",
-                border: "1px solid #e0e0e0",
-                background: "#fff",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 650,
-              }}
-            >
-              {playing ? "Pause" : "Play"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setPlayCaseId(undefined)}
-              style={{
-                borderRadius: 10,
-                padding: "7px 10px",
-                border: "1px solid #e0e0e0",
-                background: "#fff",
-                cursor: "pointer",
-                fontSize: 12,
-                fontWeight: 650,
-              }}
-            >
-              Reset
-            </button>
-          </div>
-        }
-        sub={<span>boule = suivi d’un cas</span>}
-      />
-    </div>
-  );
-
-  const knobsPanel = (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
-      <div style={{ border: "1px solid #e6e6e6", borderRadius: 14, padding: 14, background: "#fff" }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>Cas simulés</div>
-        <Slider
-          label=""
-          value={knobs.cases}
-          min={20}
-          max={500}
-          step={10}
-          right={<span>{knobs.cases}</span>}
-          onChange={(v) => setKnobs((k) => ({ ...k, cases: v }))}
-        />
-        <div style={{ marginTop: 10, fontSize: 12, color: "#666" }}>Seed: {knobs.seed}</div>
-      </div>
-
-      <div style={{ border: "1px solid #e6e6e6", borderRadius: 14, padding: 14, background: "#fff" }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>Déviations</div>
-        <Slider
-          label="Skip gates"
-          value={Math.round(knobs.skipGatesPct * 100)}
-          min={0}
-          max={80}
-          step={5}
-          right={formatPct(knobs.skipGatesPct)}
-          onChange={(v) => setKnobs((k) => ({ ...k, skipGatesPct: v / 100 }))}
-        />
-        <div style={{ height: 8 }} />
-        <Slider
-          label="Manual transfer"
-          value={Math.round(knobs.manualTransferPct * 100)}
-          min={0}
-          max={80}
-          step={5}
-          right={formatPct(knobs.manualTransferPct)}
-          onChange={(v) => setKnobs((k) => ({ ...k, manualTransferPct: v / 100 }))}
-        />
-        <div style={{ height: 8 }} />
-        <Slider
-          label="Uncontrolled loops"
-          value={Math.round(knobs.uncontrolledLoopsPct * 100)}
-          min={0}
-          max={80}
-          step={5}
-          right={formatPct(knobs.uncontrolledLoopsPct)}
-          onChange={(v) => setKnobs((k) => ({ ...k, uncontrolledLoopsPct: v / 100 }))}
-        />
-      </div>
-
-      <div style={{ border: "1px solid #e6e6e6", borderRadius: 14, padding: 14, background: "#fff" }}>
-        <div style={{ fontSize: 12, color: "#666", marginBottom: 10 }}>Affichage</div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {(["avg+p95", "p95", "avg", "count", "none"] as LabelMode[]).map((m) => (
-            <Pill key={m} active={labelMode === m} onClick={() => setLabelMode(m)}>
-              {m}
-            </Pill>
-          ))}
-        </div>
-        <div style={{ marginTop: 12, display: "flex", gap: 10, alignItems: "center" }}>
-          <input
-            id="lock"
-            type="checkbox"
-            checked={lockColumns}
-            onChange={(e) => setLockColumns(e.target.checked)}
-          />
-          <label htmlFor="lock" style={{ fontSize: 12, color: "#555" }}>
-            Verrouiller les colonnes
-          </label>
-        </div>
-        <div style={{ marginTop: 12, fontSize: 12, color: "#666" }}>
-          Raisons d’écarts :
-          <ul style={{ margin: "6px 0 0 16px" }}>
-            {ISSUE_FAMILIES.map((f) => (
-              <li key={f.key}>{f.label}</li>
-            ))}
-          </ul>
-        </div>
-      </div>
-    </div>
-  );
-
-  const rightPanel = (
-    <div style={{ border: "1px solid #e6e6e6", borderRadius: 14, background: "#fff", overflow: "hidden" }}>
-      <div style={{ padding: 14, borderBottom: "1px solid #eee" }}>
-        <div style={{ fontSize: 13, fontWeight: 750 }}>{focusLabel}</div>
-        <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-          <Pill active={tab === "events"} onClick={() => setTab("events")}>Events</Pill>
-          <Pill active={tab === "traces"} onClick={() => setTab("traces")}>Traces</Pill>
-          <Pill active={tab === "stats"} onClick={() => setTab("stats")}>Stats</Pill>
-        </div>
-      </div>
-
-      <div style={{ padding: 14, maxHeight: 460, overflow: "auto" }}>
-        {tab === "events" ? (
-          <div>
-            <div style={{ fontSize: 12, color: "#666" }}>
-              {focusEvents.length} events (limit 250)
-            </div>
-            <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-              {focusEvents.map((e, idx) => (
-                <div
-                  key={`${e.caseId}-${idx}`}
-                  style={{
-                    border: "1px solid #eee",
-                    borderRadius: 12,
-                    padding: 10,
-                    display: "grid",
-                    gridTemplateColumns: "1fr auto",
-                    gap: 10,
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 700 }}>{e.caseId}</div>
-                    <div style={{ fontSize: 12, color: "#666", marginTop: 2 }}>
-                      t={formatHoursFromMin(e.tsMin)} · {e.resource}
-                    </div>
-                    {e.issue ? (
-                      <div style={{ fontSize: 12, color: "#b11", marginTop: 6, fontWeight: 650 }}>
-                        {ISSUE_FAMILIES.find((f) => f.key === e.issue)?.label ?? e.issue}
-                      </div>
-                    ) : null}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setPlayCaseId(e.caseId)}
-                    style={{
-                      borderRadius: 10,
-                      padding: "7px 10px",
-                      border: "1px solid #e0e0e0",
-                      background: "#fff",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 650,
-                      height: 34,
-                      alignSelf: "center",
-                    }}
-                  >
-                    Suivre
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {tab === "traces" ? (
-          <div>
-            <div style={{ fontSize: 12, color: "#666" }}>Top traces (séquences de nœuds)</div>
-            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-              {traces.map((tr) => (
-                <div key={tr.signature} style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                    <div style={{ fontSize: 12, fontWeight: 750 }}>{tr.count} cas</div>
-                    <div style={{ fontSize: 12, color: "#666" }}>avg {formatHoursFromMin(tr.avgLeadMin)} · p95 {formatHoursFromMin(tr.p95LeadMin)}</div>
-                  </div>
-                  <div style={{ marginTop: 8, fontSize: 12, color: "#333", lineHeight: 1.35 }}>
-                    {tr.steps
-                      .map((id) => STEPS.find((s) => s.id === id)?.label ?? id)
-                      .join(" → ")}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {tab === "stats" ? (
-          <div>
-            <div style={{ fontSize: 12, color: "#666" }}>Résumé</div>
-            <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
-              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontSize: 12, color: "#666" }}>Cas</div>
-                <div style={{ fontSize: 18, fontWeight: 800 }}>{resources.totalCases}</div>
-              </div>
-              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontSize: 12, color: "#666" }}>Conformance</div>
-                <div style={{ fontSize: 18, fontWeight: 800 }}>{formatPct(conf.conformPct)}</div>
-                <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>
-                  transitions non conformes: {conf.nonConformTransitions}
-                </div>
-              </div>
-              <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 12 }}>
-                <div style={{ fontSize: 12, color: "#666" }}>Lead time</div>
-                <div style={{ fontSize: 18, fontWeight: 800 }}>{formatHoursFromMin(lead.avgMin)} (avg)</div>
-                <div style={{ fontSize: 12, color: "#666", marginTop: 6 }}>p95 {formatHoursFromMin(lead.p95Min)}</div>
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
-    </div>
-  );
+    );
+  }
 
   return (
-    <div style={{ padding: 18, background: "#fafafa", minHeight: "100vh" }}>
-      {TopBar}
-      {leftControls}
-      {knobsPanel}
+    <ReactFlowProvider>
+      <div
+        style={{
+          height: "calc(100vh - 24px)",
+          minHeight: 720,
+          display: "grid",
+          gridTemplateColumns: "1fr 360px",
+          gap: 12,
+          padding: 12,
+          background: "#f4f4f4",
+          fontFamily: "system-ui, Arial",
+        }}
+      >
+        {/* MAIN */}
+        <div
+          style={{
+            borderRadius: 18,
+            overflow: "hidden",
+            border: "1px solid #e5e5e5",
+            background: "#fff",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.06)",
+            position: "relative",
+          }}
+        >
+          {/* Top bar */}
+          <div
+            style={{
+              position: "absolute",
+              top: 10,
+              left: 10,
+              right: 10,
+              zIndex: 20,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 10,
+              pointerEvents: "none",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                padding: 10,
+                borderRadius: 14,
+                background: "rgba(255,255,255,0.92)",
+                border: "1px solid #e8e8e8",
+                boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+                pointerEvents: "auto",
+              }}
+            >
+              <strong style={{ fontSize: 12 }}>Process Graph</strong>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 380px", gap: 12, marginTop: 12, alignItems: "start" }}>
-        <div style={{ border: "1px solid #e6e6e6", borderRadius: 14, background: "#fff", overflow: "hidden" }}>
-          <div style={{ height: 640 }}>
+              <select
+                value={variant}
+                onChange={(e) => {
+                  setVariant(e.target.value as Variant);
+                  setPlaying(false);
+                  replay();
+                }}
+                style={{ fontSize: 12, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
+                title="Variante"
+              >
+                <option value="AS_IS">AS-IS</option>
+                <option value="TO_BE">TO-BE</option>
+              </select>
+
+              <select
+                value={labelMode}
+                onChange={(e) => setLabelMode(e.target.value as LabelMode)}
+                style={{ fontSize: 12, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
+                title="Etiquettes des transitions"
+              >
+                <option value="avg+p95">count + moy + p95</option>
+                <option value="count">count</option>
+                <option value="avg">moy</option>
+                <option value="p95">p95</option>
+                <option value="none">none</option>
+              </select>
+
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={showIssues}
+                  onChange={(e) => setShowIssues(e.target.checked)}
+                />
+                Incidents
+              </label>
+
+              <button
+                onClick={() => {
+                  setPlaying((p) => !p);
+                  if (!playing) replay();
+                }}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: "#111",
+                  color: "#fff",
+                  cursor: "pointer",
+                }}
+                title="Token animation"
+              >
+                {playing ? "Pause" : "Play"}
+              </button>
+
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                Vitesse
+                <input
+                  type="range"
+                  min={0.25}
+                  max={3}
+                  step={0.25}
+                  value={speed}
+                  onChange={(e) => setSpeed(Number(e.target.value))}
+                />
+                <span style={{ width: 32, textAlign: "right" }}>{speed.toFixed(2)}×</span>
+              </label>
+
+              <button
+                onClick={resetLayout}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: "#fff",
+                  cursor: "pointer",
+                }}
+                title="Revenir au layout automatique (positions sauvegardées supprimées)"
+              >
+                Reset layout
+              </button>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                padding: 10,
+                borderRadius: 14,
+                background: "rgba(255,255,255,0.92)",
+                border: "1px solid #e8e8e8",
+                boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
+                pointerEvents: "auto",
+              }}
+            >
+              <span style={{ fontSize: 12, fontWeight: 700 }}>Simulation</span>
+              <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                Cas
+                <input
+                  type="number"
+                  value={simCfg.nCases}
+                  min={5}
+                  max={500}
+                  onChange={(e) => setSimCfg((p) => ({ ...p, nCases: Number(e.target.value) }))}
+                  style={{ width: 80, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
+                />
+              </label>
+              <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
+                Seed
+                <input
+                  type="number"
+                  value={simCfg.seed}
+                  onChange={(e) => setSimCfg((p) => ({ ...p, seed: Number(e.target.value) }))}
+                  style={{ width: 90, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
+                />
+              </label>
+              <button
+                onClick={runSim}
+                style={{
+                  fontSize: 12,
+                  padding: "6px 10px",
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: "#fff",
+                  cursor: "pointer",
+                }}
+              >
+                Re-simuler
+              </button>
+            </div>
+          </div>
+
+          <div style={{ height: "100%" }}>
             <ReactFlow
-              nodes={rfNodes}
-              edges={rfEdges}
+              nodes={rfNodes.map((n) => {
+                if (n.id === "__token__") return n;
+                const d = n.data as ActivityNodeData;
+                if (!showIssues) {
+                  return {
+                    ...n,
+                    data: { ...d, issues: { qualite_conformite: 0, donnees_continuite: 0, organisation_flux: 0, risque: 0 } },
+                  };
+                }
+                return n;
+              })}
+              edges={decoratedEdges}
               nodeTypes={nodeTypes}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
               onNodeClick={onNodeClick}
-              nodesConnectable={false}
-              nodesDraggable={true}
               fitView
-              fitViewOptions={{ padding: 0.22 }}
-              defaultViewport={{ x: 60, y: 40, zoom: 0.8 }}
-              onInit={(inst) => {
-                rfInstanceRef.current = inst;
-                // initial focus center
-                const n = baseNodes.find((x) => x.id === focus);
-                if (n) inst.setCenter(n.position.x + 110, n.position.y + 30, { zoom: 0.85, duration: 1 });
-              }}
+              minZoom={0.2}
+              maxZoom={1.5}
+              defaultViewport={{ x: 30, y: 40, zoom: 0.85 }}
+              proOptions={{ hideAttribution: true }}
             >
-              <Background gap={16} size={1} color="#eee" />
+              <Background gap={20} size={1} />
+              <MiniMap pannable zoomable />
               <Controls />
-              <MiniMap
-                nodeColor={(n) => (n.type === "token" ? "#111" : "#ddd")}
-                nodeStrokeWidth={2}
-                maskColor="rgba(0,0,0,0.05)"
-              />
-
-              <Panel position="top-left">
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const inst = rfInstanceRef.current;
-                      if (!inst) return;
-                      inst.fitView({ padding: 0.25, duration: 250 });
-                    }}
-                    style={{
-                      borderRadius: 10,
-                      padding: "8px 10px",
-                      border: "1px solid #e0e0e0",
-                      background: "#fff",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 650,
-                    }}
-                  >
-                    Fit
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setManualPos({});
-                    }}
-                    style={{
-                      borderRadius: 10,
-                      padding: "8px 10px",
-                      border: "1px solid #e0e0e0",
-                      background: "#fff",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      fontWeight: 650,
-                    }}
-                  >
-                    Reset layout
-                  </button>
-                </div>
-              </Panel>
-
-              <Panel position="bottom-left">
-                <div style={{ fontSize: 12, color: "#666" }}>
-                  Cas: {resources.totalCases} · Mode: {mode.toUpperCase()} · Conformance: {formatPct(conf.conformPct)}
-                </div>
-              </Panel>
             </ReactFlow>
           </div>
         </div>
 
-        {rightPanel}
-      </div>
-    </div>
-  );
-}
+        {/* SIDE PANEL */}
+        <div
+          style={{
+            borderRadius: 18,
+            overflow: "hidden",
+            border: "1px solid #e5e5e5",
+            background: "#fff",
+            boxShadow: "0 12px 40px rgba(0,0,0,0.06)",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div style={{ padding: 12, borderBottom: "1px solid #eee" }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>Variante</div>
+            <div style={{ fontSize: 14, fontWeight: 900 }}>{model.title}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <button
+                onClick={() => setTab("events")}
+                style={{
+                  flex: 1,
+                  padding: "8px 10px",
+                  borderRadius: 12,
+                  border: "1px solid #ddd",
+                  background: tab === "events" ? "#111" : "#fff",
+                  color: tab === "events" ? "#fff" : "#111",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}
+              >
+                Events
+              </button>
+              <button
+                onClick={() => setTab("traces")}
+                style={{
+                  flex: 1,
+                  padding: "8px 10px",
+                  borderRadius: 12,
+                  border: "1px solid #ddd",
+                  background: tab === "traces" ? "#111" : "#fff",
+                  color: tab === "traces" ? "#fff" : "#111",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}
+              >
+                Traces
+              </button>
+              <button
+                onClick={() => setTab("stats")}
+                style={{
+                  flex: 1,
+                  padding: "8px 10px",
+                  borderRadius: 12,
+                  border: "1px solid #ddd",
+                  background: tab === "stats" ? "#111" : "#fff",
+                  color: tab === "stats" ? "#fff" : "#111",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 800,
+                }}
+              >
+                Stats
+              </button>
+            </div>
+          </div>
+
+          <div style={{ padding: 12, overflow: "auto" }}>
+            {tab === "events" ? (
+              <>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Activité sélectionnée</div>
+                <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 8 }}>
+                  {selectedNode?.data?.label ?? selectedNodeId}
+                </div>
+
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Focus trace</div>
+                <select
+                  value={focusCaseId}
+                  onChange={(e) => {
+                    setFocusCaseId(e.target.value);
+                    replay();
+                  }}
+                  style={{ width: "100%", padding: "10px 10px", borderRadius: 12, border: "1px solid #ddd" }}
+                >
+                  {caseStats.map((c) => (
+                    <option key={c.caseId} value={c.caseId}>
+                      {c.caseId} — {fmtDays8hFromMin(c.leadTimeMin)} — dev {c.deviationEdges}
+                    </option>
+                  ))}
+                </select>
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>Trace (ordre des boîtes)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {focusTraceEvents.slice(0, 30).map((e) => (
+                    <div
+                      key={`${e.caseId}-${e.idx}`}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 12,
+                        border: "1px solid #eee",
+                        background: e.activityId === selectedNodeId ? "#f1f1f1" : "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 900 }}>
+                        {e.activityId} <span style={{ fontWeight: 600, opacity: 0.7 }}>({e.stage})</span>
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
