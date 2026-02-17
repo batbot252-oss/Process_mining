@@ -10,32 +10,19 @@ import ReactFlow, {
   applyNodeChanges,
   Edge,
   EdgeChange,
-  MarkerType,
   Node,
   NodeChange,
   Position,
+  MarkerType,
 } from "reactflow";
+import "reactflow/dist/style.css";
 
-/**
- * NOTE CSS:
- * Next.js (App Router) interdit l'import global CSS depuis un composant.
- * On injecte donc un CSS minimal (en bas dans le composant).
- */
+/** =========================
+ *  Types & helpers
+ *  ========================= */
 
-// ------------------------------
-// Types
-// ------------------------------
-
-type Variant = "AS_IS" | "TO_BE";
-
-type Stage =
-  | "BE"
-  | "BM"
-  | "SIMU"
-  | "PROTO"
-  | "QUALIF"
-  | "INDUS"
-  | "RELEASE";
+type Mode = "AS_IS" | "TO_BE";
+type LabelMode = "count" | "avg" | "p95" | "avg+p95" | "none";
 
 type IssueFamily =
   | "qualite_conformite"
@@ -43,1815 +30,1351 @@ type IssueFamily =
   | "organisation_flux"
   | "risque";
 
-type LabelMode = "count" | "avg" | "p95" | "avg+p95" | "none";
-
-type Tab = "events" | "traces" | "stats";
-
-type ActivityNodeData = {
-  kind: "activity";
-  label: string;
-  stage: Stage;
-  role: string;
-  tool?: string;
-  headcount: number;
-  // computed
-  traces?: number;
-  eventsCount?: number;
-  issues?: Record<IssueFamily, number>; // counts in AS-IS
+const ISSUE_LABEL: Record<IssueFamily, string> = {
+  qualite_conformite: "Qualité / conformité",
+  donnees_continuite: "Données / continuité numérique",
+  organisation_flux: "Organisation / flux",
+  risque: "Risque",
 };
 
-type TokenNodeData = {
-  kind: "token";
-};
+type ActivityId =
+  | "cad_catpart"
+  | "preprocess_main"
+  | "flow3d_360"
+  | "flow3d_fill"
+  | "abaqus_fill_mech"
+  | "sector_input"
+  | "procast_thermal_preheat"
+  | "abaqus_preheat_mech"
+  | "preprocess_deformed"
+  | "export_results"
+  | "review_decision"
+  | "rework_loop";
 
-type NodeData = ActivityNodeData | TokenNodeData;
-
-type EventRow = {
+type Event = {
   caseId: string;
-  idx: number;
-  variant: Variant;
-  activityId: string;
-  activity: string;
-  stage: Stage;
-  tsMin: number; // minutes since case start
-  durationMin: number; // duration spent IN this activity
-  resource: string;
-  tool?: string;
-  issue?: IssueFamily | null;
+  ts: number; // epoch ms
+  activity: ActivityId;
+  nodeId: string;
+  resource: string; // role/person
+  issue?: IssueFamily; // if deviation/problem
 };
 
-type CaseStats = {
+type Trace = {
   caseId: string;
-  variant: Variant;
-  startMin: number;
-  endMin: number;
-  leadTimeMin: number;
-  deviationEdges: number;
-  deviationTimeMin: number;
+  events: Event[];
 };
 
-type EdgeStats = {
-  from: string;
-  to: string;
+type SimParams = {
+  cases: number;
+  seed: number;
+  skipGates: number; // 0..1
+  manualTransfer: number; // 0..1
+  uncontrolledLoops: number; // 0..1
+};
+
+type EdgeStat = {
   count: number;
-  avgDurMin: number;
-  p95DurMin: number;
+  avgMin: number;
+  p95Min: number;
 };
 
-type DFG = {
-  nodes: Map<
-    string,
-    {
-      activityId: string;
-      activity: string;
-      stage: Stage;
-      countEvents: number;
-      countTraces: number;
-      issues: Record<IssueFamily, number>;
-    }
-  >;
-  edges: Map<string, EdgeStats>; // key: from->to
-};
-
-type ModelEdge = { from: string; to: string };
-
-type ProcessModel = {
-  id: string;
-  title: string;
-  nodes: {
-    id: string;
-    label: string;
-    stage: Stage;
-    role: string;
-    tool?: string;
-    headcount: number;
-  }[];
-  edges: ModelEdge[];
-};
-
-// ------------------------------
-// Constants
-// ------------------------------
-
-export const ISSUE_FAMILIES: Record<IssueFamily, { label: string; short: string }> = {
-  qualite_conformite: { label: "Qualité / conformité", short: "Q" },
-  donnees_continuite: { label: "Données / continuité numérique", short: "D" },
-  organisation_flux: { label: "Organisation / flux", short: "O" },
-  risque: { label: "Risque", short: "R" },
-};
-
-const STAGE_COLUMNS: Stage[] = [
-  "BE",
-  "BM",
-  "SIMU",
-  "PROTO",
-  "QUALIF",
-  "INDUS",
-  "RELEASE",
-];
-
-// ------------------------------
-// Helpers (math + format)
-// ------------------------------
-
-function clamp(v: number, a: number, b: number) {
-  return Math.max(a, Math.min(b, v));
+function mulberry32(seed: number) {
+  let t = seed >>> 0;
+  return function rand() {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), 1 | t);
+    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
-function percentile(values: number[], p: number) {
-  if (values.length === 0) return 0;
-  const arr = [...values].sort((a, b) => a - b);
-  const idx = (p / 100) * (arr.length - 1);
-  const lo = Math.floor(idx);
-  const hi = Math.ceil(idx);
-  if (lo === hi) return arr[lo];
-  const t = idx - lo;
-  return arr[lo] * (1 - t) + arr[hi] * t;
+function clamp01(x: number) {
+  return Math.max(0, Math.min(1, x));
 }
 
-function mean(values: number[]) {
-  if (values.length === 0) return 0;
-  let s = 0;
-  for (const v of values) s += v;
-  return s / values.length;
+function quantile(sorted: number[], q: number) {
+  if (sorted.length === 0) return 0;
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sorted[base + 1] === undefined) return sorted[base];
+  return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+}
+
+function minutesBetween(a: number, b: number) {
+  return Math.max(0, Math.round((b - a) / 60000));
 }
 
 function fmtHoursFromMin(min: number) {
   const h = min / 60;
-  if (h < 1) return `${Math.round(min)} min`;
-  if (h < 12) return `${h.toFixed(1)} h`;
-  return `${Math.round(h)} h`;
+  if (h < 1) return `${min}m`;
+  if (h < 48) return `${Math.round(h * 10) / 10}h`;
+  const d = Math.round((h / 8) * 10) / 10; // 8h-day
+  return `${d}j (8h)`;
 }
 
-function fmtDays8hFromMin(min: number) {
-  const days = min / (60 * 8);
-  if (days < 1) return `${(min / 60).toFixed(1)} h`;
-  return `${days.toFixed(1)} j (8h)`;
-}
+/** =========================
+ *  Process definition (TO-BE reference)
+ *  ========================= */
 
-function seededRand(seed: number) {
-  // xorshift32
-  let x = seed | 0;
-  return () => {
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    // [0,1)
-    return ((x >>> 0) % 1_000_000) / 1_000_000;
-  };
-}
-
-function pick<T>(rng: () => number, arr: T[]) {
-  return arr[Math.floor(rng() * arr.length)];
-}
-
-function maybe(rng: () => number, p: number) {
-  return rng() < p;
-}
-
-// ------------------------------
-// Process Models (AS-IS / TO-BE)
-// ------------------------------
-
-/**
- * Process orienté Engineering (BE/BM/SIMU) inspiré d'une lecture « Celonis-like ».
- * Les noeuds représentent des "boîtes" (activités agrégées). Les events sont les actions détaillées.
- */
-
-export const TO_BE: ProcessModel = {
-  id: "to-be-v1",
-  title: "TO-BE — Engineering Digital Thread",
-  nodes: [
-    {
-      id: "be_req",
-      label: "BE — Besoin & exigences\n(Fonctions, contraintes)",
-      stage: "BE",
-      role: "Lead BE",
-      tool: "PLM",
-      headcount: 2,
-    },
-    {
-      id: "be_cad",
-      label: "BE — CAO paramétrée\n(Modèle + paramètres)",
-      stage: "BE",
-      role: "BE CAO",
-      tool: "CATIA / 3DX",
-      headcount: 3,
-    },
-    {
-      id: "be_review",
-      label: "BE — Revue conception\n(contrôle, standard)",
-      stage: "BE",
-      role: "Lead BE",
-      tool: "PLM",
-      headcount: 2,
-    },
-    {
-      id: "bm_methods",
-      label: "BM — Méthodes / industrialisation\n(fabricabilité, gamme)",
-      stage: "BM",
-      role: "BM",
-      tool: "ERP / PLM",
-      headcount: 2,
-    },
-    {
-      id: "bm_pre_sim",
-      label: "BM — Préparation simulation\n(données, maillage, hypothèses)",
-      stage: "BM",
-      role: "Ingénieur Hybride",
-      tool: "ANSA / Visual Mesh",
-      headcount: 1,
-    },
-    {
-      id: "sim_setup",
-      label: "SIMU — Setup\n(BC, matériaux, charge)",
-      stage: "SIMU",
-      role: "Simu",
-      tool: "ABAQUS / ProCast",
-      headcount: 2,
-    },
-    {
-      id: "sim_run",
-      label: "SIMU — Calcul\n(runs, convergence)",
-      stage: "SIMU",
-      role: "Simu",
-      tool: "HPC",
-      headcount: 1,
-    },
-    {
-      id: "sim_post",
-      label: "SIMU — Post-traitement\n(résultats, critères)",
-      stage: "SIMU",
-      role: "Simu",
-      tool: "Post",
-      headcount: 1,
-    },
-    {
-      id: "decision",
-      label: "Décision\n(OK / Rework + raison)",
-      stage: "SIMU",
-      role: "IPT",
-      tool: "PLM",
-      headcount: 4,
-    },
-    {
-      id: "proto",
-      label: "PROTO — Essai\n(proto, mesures)",
-      stage: "PROTO",
-      role: "Proto",
-      tool: "Lab",
-      headcount: 2,
-    },
-    {
-      id: "qualif",
-      label: "QUALIF — Dossier & conformité\n(validation)",
-      stage: "QUALIF",
-      role: "Qualité",
-      tool: "PLM",
-      headcount: 1,
-    },
-    {
-      id: "release",
-      label: "RELEASE\nRéférence validée", 
-      stage: "RELEASE",
-      role: "PLM",
-      tool: "PLM",
-      headcount: 1,
-    },
-  ],
-  edges: [
-    { from: "be_req", to: "be_cad" },
-    { from: "be_cad", to: "be_review" },
-    { from: "be_review", to: "bm_methods" },
-    { from: "bm_methods", to: "bm_pre_sim" },
-    { from: "bm_pre_sim", to: "sim_setup" },
-    { from: "sim_setup", to: "sim_run" },
-    { from: "sim_run", to: "sim_post" },
-    { from: "sim_post", to: "decision" },
-    { from: "decision", to: "proto" },
-    { from: "proto", to: "qualif" },
-    { from: "qualif", to: "release" },
-    // Boucle contrôlée (rework)
-    { from: "decision", to: "be_cad" },
-    { from: "decision", to: "bm_pre_sim" },
-  ],
+type ProcNodeDef = {
+  id: string; // ReactFlow node id
+  activity: ActivityId;
+  title: string;
+  tool: string;
+  team: string;
+  headcount: number;
+  stage: "Inputs" | "Pre-process" | "Thermal" | "CFD" | "FEA" | "Review" | "Output";
 };
 
-/**
- * AS-IS = même "colonne vertébrale" mais plus de boucles et contournements (data discontinuity / org / qualité / risque).
- */
-export const AS_IS_MODEL: ProcessModel = {
-  id: "as-is-v1",
-  title: "AS-IS — Flux réel (avec rework)",
-  nodes: TO_BE.nodes,
-  edges: [
-    ...TO_BE.edges,
-    // contournements et retours plus fréquents
-    { from: "bm_methods", to: "be_cad" },
-    { from: "sim_post", to: "bm_pre_sim" },
-    { from: "proto", to: "be_cad" },
-    { from: "proto", to: "bm_methods" },
-  ],
+type ProcEdgeDef = {
+  id: string;
+  source: string;
+  target: string;
+  label: string;
 };
 
-function modelAllowedEdgeSet(model: ProcessModel) {
-  const set = new Set<string>();
-  for (const e of model.edges) set.add(`${e.from}→${e.to}`);
-  return set;
+const PROCESS_NODES: ProcNodeDef[] = [
+  {
+    id: "N_CAD",
+    activity: "cad_catpart",
+    title: "Entrée CAO",
+    tool: "CATIA / 3DEXP",
+    team: "BE",
+    headcount: 4,
+    stage: "Inputs",
+  },
+  {
+    id: "N_PRE_A",
+    activity: "preprocess_main",
+    title: "Pré-process",
+    tool: "Pre-process (A)",
+    team: "BM / SIMU",
+    headcount: 2,
+    stage: "Pre-process",
+  },
+  {
+    id: "N_FLOW_360",
+    activity: "flow3d_360",
+    title: "Verse « 360 »",
+    tool: "Flow-3D",
+    team: "SIMU CFD",
+    headcount: 2,
+    stage: "CFD",
+  },
+  {
+    id: "N_FLOW_FILL",
+    activity: "flow3d_fill",
+    title: "Remplissage « zoom »",
+    tool: "Flow-3D",
+    team: "SIMU CFD",
+    headcount: 2,
+    stage: "CFD",
+  },
+  {
+    id: "N_ABA_FILL",
+    activity: "abaqus_fill_mech",
+    title: "Mécanique remplissage",
+    tool: "ABAQUS",
+    team: "SIMU FEA",
+    headcount: 1,
+    stage: "FEA",
+  },
+  {
+    id: "N_SECTOR",
+    activity: "sector_input",
+    title: "Entrée Secteur",
+    tool: "Secteur",
+    team: "Méthodes",
+    headcount: 1,
+    stage: "Inputs",
+  },
+  {
+    id: "N_PROCAST",
+    activity: "procast_thermal_preheat",
+    title: "Thermique préchauffage",
+    tool: "ProCast",
+    team: "SIMU Procédé",
+    headcount: 1,
+    stage: "Thermal",
+  },
+  {
+    id: "N_ABA_PREH",
+    activity: "abaqus_preheat_mech",
+    title: "Calcul préchauff. (mécanique)",
+    tool: "ABAQUS",
+    team: "SIMU FEA",
+    headcount: 1,
+    stage: "FEA",
+  },
+  {
+    id: "N_PRE_DEF",
+    activity: "preprocess_deformed",
+    title: "Pré-process (déformé)",
+    tool: "Pre-process (B)",
+    team: "BM / SIMU",
+    headcount: 1,
+    stage: "Pre-process",
+  },
+  {
+    id: "N_REVIEW",
+    activity: "review_decision",
+    title: "Revue / décision",
+    tool: "Revue",
+    team: "IPT",
+    headcount: 3,
+    stage: "Review",
+  },
+  {
+    id: "N_EXPORT",
+    activity: "export_results",
+    title: "Sorties / Export",
+    tool: "STL/CSV/INP",
+    team: "SIMU",
+    headcount: 1,
+    stage: "Output",
+  },
+];
+
+const TO_BE_EDGES: ProcEdgeDef[] = [
+  { id: "E1", source: "N_CAD", target: "N_PRE_A", label: "catpart → stl" },
+  { id: "E2", source: "N_PRE_A", target: "N_FLOW_360", label: "stl" },
+  { id: "E3", source: "N_FLOW_360", target: "N_FLOW_FILL", label: "csv (débit)" },
+  { id: "E4", source: "N_FLOW_FILL", target: "N_ABA_FILL", label: "inp" },
+  { id: "E5", source: "N_SECTOR", target: "N_PROCAST", label: "catpart" },
+  { id: "E6", source: "N_PROCAST", target: "N_ABA_PREH", label: "t°/champs" },
+  { id: "E7", source: "N_ABA_PREH", target: "N_PRE_DEF", label: "stl (déformé)" },
+  { id: "E8", source: "N_PRE_DEF", target: "N_FLOW_FILL", label: "stl (déformé)" },
+  { id: "E9", source: "N_ABA_FILL", target: "N_REVIEW", label: "résultats" },
+  { id: "E10", source: "N_REVIEW", target: "N_EXPORT", label: "OK → export" },
+  // possible rework loop via review (not always used)
+  { id: "E11", source: "N_REVIEW", target: "N_PRE_A", label: "NOK → reprise" },
+];
+
+const ALLOWED_EDGE_SET = new Set(TO_BE_EDGES.map((e) => `${e.source}=>${e.target}`));
+
+/** =========================
+ *  Simulation (AS-IS vs TO-BE)
+ *  ========================= */
+
+function pickIssue(rand: () => number): IssueFamily {
+  const r = rand();
+  if (r < 0.25) return "qualite_conformite";
+  if (r < 0.55) return "donnees_continuite";
+  if (r < 0.8) return "organisation_flux";
+  return "risque";
 }
 
-// ------------------------------
-// Simulation (event log)
-// ------------------------------
-
-type SimConfig = {
-  nCases: number;
-  seed: number;
-};
-
-const DEFAULT_SIM: SimConfig = { nCases: 40, seed: 42 };
-
-function activityMetaById(model: ProcessModel) {
-  const m = new Map<string, (typeof model.nodes)[number]>();
-  for (const n of model.nodes) m.set(n.id, n);
-  return m;
-}
-
-function genCaseId(i: number) {
-  return `CASE_${String(i + 1).padStart(4, "0")}`;
-}
-
-function simulateCase(
-  rng: () => number,
-  variant: Variant,
+function simulateOneTrace(
+  rand: () => number,
   caseId: string,
-  baseModel: ProcessModel
-): EventRow[] {
-  const meta = activityMetaById(baseModel);
+  mode: Mode,
+  params: SimParams
+): Trace {
+  const baseTs = Date.now() - Math.floor(rand() * 7 * 24 * 3600 * 1000);
+  let ts = baseTs;
 
-  // Paramètres "réalistes" (minutes)
-  const dur = {
-    be_req: [60, 180],
-    be_cad: [240, 1200],
-    be_review: [30, 180],
-    bm_methods: [120, 480],
-    bm_pre_sim: [120, 600],
-    sim_setup: [60, 240],
-    sim_run: [120, 720],
-    sim_post: [60, 240],
-    decision: [15, 90],
-    proto: [240, 1440],
-    qualif: [120, 480],
-    release: [1, 5],
-  } as Record<string, [number, number]>;
+  const ev: Event[] = [];
 
-  const resources = {
-    BE: ["BE_A", "BE_B", "BE_C"],
-    BM: ["BM_A", "BM_B"],
-    SIMU: ["SIMU_A", "SIMU_B"],
-    PROTO: ["PROTO_A"],
-    QUALIF: ["QUAL_A"],
-    INDUS: ["INDUS_A"],
-    RELEASE: ["PLM_BOT"],
-  } as Record<Stage, string[]>;
-
-  const seqCore = [
-    "be_req",
-    "be_cad",
-    "be_review",
-    "bm_methods",
-    "bm_pre_sim",
-    "sim_setup",
-    "sim_run",
-    "sim_post",
-    "decision",
-    "proto",
-    "qualif",
-    "release",
-  ];
-
-  // AS-IS = plus de boucles (rework) et plus de problèmes de continuité/orga
-  const pRework = variant === "AS_IS" ? 0.55 : 0.25;
-  const pDataIssue = variant === "AS_IS" ? 0.30 : 0.12;
-  const pQualityIssue = variant === "AS_IS" ? 0.25 : 0.12;
-  const pOrgIssue = variant === "AS_IS" ? 0.22 : 0.08;
-  const pRiskIssue = variant === "AS_IS" ? 0.12 : 0.06;
-
-  let idx = 0;
-  let t = 0;
-  const rows: EventRow[] = [];
-
-  const pushAct = (activityId: string, issue: IssueFamily | null) => {
-    const metaN = meta.get(activityId);
-    if (!metaN) return;
-    const [a, b] = dur[activityId] ?? [30, 120];
-    // bruit
-    const d = a + Math.round((b - a) * rng());
-    const resource = pick(rng, resources[metaN.stage]);
-    rows.push({
-      caseId,
-      idx: idx++,
-      variant,
-      activityId,
-      activity: metaN.label.replace(/\n/g, " — "),
-      stage: metaN.stage,
-      tsMin: t,
-      durationMin: d,
-      resource,
-      tool: metaN.tool,
-      issue,
-    });
-    t += d;
+  const push = (nodeId: string, activity: ActivityId, resource: string, issue?: IssueFamily) => {
+    ev.push({ caseId, ts, nodeId, activity, resource, issue });
   };
 
-  // passe principale
-  for (const act of seqCore) {
-    let issue: IssueFamily | null = null;
-    if (act !== "release") {
-      if (maybe(rng, pDataIssue)) issue = "donnees_continuite";
-      else if (maybe(rng, pQualityIssue)) issue = "qualite_conformite";
-      else if (maybe(rng, pOrgIssue)) issue = "organisation_flux";
-      else if (maybe(rng, pRiskIssue)) issue = "risque";
+  // role pool (effectifs / traces)
+  const R = {
+    BE: ["BE_1", "BE_2", "BE_3", "BE_4"],
+    BM: ["BM_1", "BM_2"],
+    CFD: ["CFD_1", "CFD_2"],
+    FEA: ["FEA_1"],
+    PROC: ["PROC_1"],
+    IPT: ["IPT_1", "IPT_2", "IPT_3"],
+  };
+
+  // TO-BE canonical path (one of two inputs can exist; AS-IS may deviate)
+  const canonicalA = ["N_CAD", "N_PRE_A", "N_FLOW_360", "N_FLOW_FILL", "N_ABA_FILL", "N_REVIEW", "N_EXPORT"];
+  const canonicalB = ["N_SECTOR", "N_PROCAST", "N_ABA_PREH", "N_PRE_DEF", "N_FLOW_FILL", "N_ABA_FILL", "N_REVIEW", "N_EXPORT"];
+
+  const pickCanonical = () => (rand() < 0.65 ? canonicalA : canonicalB);
+  const path = pickCanonical();
+
+  // durations per step (minutes)
+  const durMin = (nodeId: string) => {
+    // TO-BE is generally smoother; AS-IS adds noise and longer tails
+    const base: Record<string, [number, number]> = {
+      N_CAD: [30, 240],
+      N_SECTOR: [10, 60],
+      N_PRE_A: [60, 300],
+      N_FLOW_360: [90, 480],
+      N_FLOW_FILL: [120, 720],
+      N_ABA_FILL: [90, 600],
+      N_PROCAST: [120, 720],
+      N_ABA_PREH: [90, 480],
+      N_PRE_DEF: [45, 240],
+      N_REVIEW: [30, 180],
+      N_EXPORT: [5, 30],
+    };
+    const [a, b] = base[nodeId] ?? [30, 120];
+    const u = rand();
+    const span = b - a;
+
+    if (mode === "TO_BE") {
+      return a + Math.floor(u * span * 0.7);
     }
-    pushAct(act, issue);
+    // AS-IS: heavier tail
+    const tail = u < 0.85 ? u : 0.85 + (u - 0.85) * 3.0;
+    return a + Math.floor(clamp01(tail) * span);
+  };
 
-    // décision : boucle si NOK
-    if (act === "decision" && maybe(rng, pRework)) {
-      // raison dominante = issue du dernier segment (sim_post) ou donnée
-      const r = rng();
-      const reason: IssueFamily =
-        r < 0.35
-          ? "qualite_conformite"
-          : r < 0.65
-          ? "donnees_continuite"
-          : r < 0.90
-          ? "organisation_flux"
-          : "risque";
+  const nodeToActivity: Record<string, ActivityId> = Object.fromEntries(
+    PROCESS_NODES.map((n) => [n.id, n.activity])
+  ) as any;
 
-      // routes de rework
-      if (reason === "qualite_conformite") {
-        // retour BE CAO
-        pushAct("be_cad", reason);
-        pushAct("be_review", null);
-      } else if (reason === "donnees_continuite") {
-        // retour préparation simulation
-        pushAct("bm_pre_sim", reason);
-      } else if (reason === "organisation_flux") {
-        // retour méthodes ou BE
-        if (maybe(rng, 0.5)) pushAct("bm_methods", reason);
-        else pushAct("be_cad", reason);
+  const nodeToRes = (nodeId: string) => {
+    if (nodeId === "N_CAD") return R.BE[Math.floor(rand() * R.BE.length)];
+    if (nodeId === "N_SECTOR") return R.BM[Math.floor(rand() * R.BM.length)];
+    if (nodeId === "N_PRE_A" || nodeId === "N_PRE_DEF") return R.BM[Math.floor(rand() * R.BM.length)];
+    if (nodeId === "N_FLOW_360" || nodeId === "N_FLOW_FILL") return R.CFD[Math.floor(rand() * R.CFD.length)];
+    if (nodeId === "N_ABA_FILL" || nodeId === "N_ABA_PREH") return R.FEA[0];
+    if (nodeId === "N_PROCAST") return R.PROC[0];
+    if (nodeId === "N_REVIEW") return R.IPT[Math.floor(rand() * R.IPT.length)];
+    return "USER";
+  };
+
+  // walk the path, inject AS-IS deviations
+  for (let i = 0; i < path.length; i++) {
+    const nodeId = path[i];
+    const activity = nodeToActivity[nodeId] ?? "rework_loop";
+    const res = nodeToRes(nodeId);
+
+    // AS-IS deviations
+    let issue: IssueFamily | undefined = undefined;
+
+    if (mode === "AS_IS") {
+      // manual transfer
+      if (rand() < params.manualTransfer) {
+        issue = pickIssue(rand);
+        ts += (20 + Math.floor(rand() * 120)) * 60000;
+      }
+      // skip gates (review rushed)
+      if (nodeId === "N_REVIEW" && rand() < params.skipGates) {
+        issue = issue ?? pickIssue(rand);
+        ts += (5 + Math.floor(rand() * 30)) * 60000;
+      }
+    }
+
+    push(nodeId, activity, res, issue);
+
+    // step duration
+    ts += durMin(nodeId) * 60000;
+
+    // uncontrolled NOK loops (AS-IS only): bounce back to preprocess and re-run some steps
+    if (mode === "AS_IS" && nodeId === "N_REVIEW" && rand() < params.uncontrolledLoops) {
+      const loops = 1 + Math.floor(rand() * 2);
+      for (let k = 0; k < loops; k++) {
+        // loop: review -> preprocess -> flow fill -> abaqus fill -> review
+        const loopSeq = ["N_PRE_A", "N_FLOW_FILL", "N_ABA_FILL", "N_REVIEW"];
+        for (const ln of loopSeq) {
+          const a2 = nodeToActivity[ln] ?? "rework_loop";
+          const r2 = nodeToRes(ln);
+          const issue2 = pickIssue(rand);
+          push(ln, a2, r2, issue2);
+          ts += (durMin(ln) + 30 + Math.floor(rand() * 180)) * 60000;
+        }
+      }
+      // after loops, continue (export)
+    }
+  }
+
+  return { caseId, events: ev };
+}
+
+function simulatePairedLog(params: SimParams) {
+  const rand = mulberry32(params.seed);
+  const toBe: Trace[] = [];
+  const asIs: Trace[] = [];
+
+  for (let i = 0; i < params.cases; i++) {
+    const caseId = `CASE_${String(i + 1).padStart(4, "0")}`;
+    toBe.push(simulateOneTrace(rand, caseId, "TO_BE", params));
+    asIs.push(simulateOneTrace(rand, caseId, "AS_IS", params));
+  }
+  return { toBe, asIs };
+}
+
+/** =========================
+ *  Mining: DFG + conformance + lead time + traces
+ *  ========================= */
+
+type DfgEdgeKey = string; // "source=>target"
+type DfgEdgeAgg = {
+  source: string;
+  target: string;
+  count: number;
+  durationsMin: number[];
+};
+
+function buildDFG(traces: Trace[]) {
+  const edges = new Map<DfgEdgeKey, DfgEdgeAgg>();
+
+  for (const t of traces) {
+    const e = t.events;
+    for (let i = 0; i < e.length - 1; i++) {
+      const a = e[i];
+      const b = e[i + 1];
+      const key = `${a.nodeId}=>${b.nodeId}`;
+      const dur = minutesBetween(a.ts, b.ts);
+
+      const cur = edges.get(key);
+      if (!cur) {
+        edges.set(key, { source: a.nodeId, target: b.nodeId, count: 1, durationsMin: [dur] });
       } else {
-        // risque : passage par méthodes
-        pushAct("bm_methods", reason);
-      }
-
-      // boucle courte vers simu
-      pushAct("sim_setup", null);
-      pushAct("sim_run", null);
-      pushAct("sim_post", null);
-      pushAct("decision", null);
-
-      // si encore NOK, une boucle max supplémentaire
-      if (maybe(rng, variant === "AS_IS" ? 0.25 : 0.10)) {
-        pushAct("be_cad", "qualite_conformite");
-        pushAct("bm_pre_sim", "donnees_continuite");
-        pushAct("sim_run", null);
-        pushAct("sim_post", null);
-        pushAct("decision", null);
+        cur.count += 1;
+        cur.durationsMin.push(dur);
       }
     }
   }
 
-  return rows;
+  const stats = new Map<DfgEdgeKey, EdgeStat>();
+  edges.forEach((agg, key) => {
+    const sorted = [...agg.durationsMin].sort((x, y) => x - y);
+    const avg = sorted.reduce((s, x) => s + x, 0) / Math.max(1, sorted.length);
+    const p95 = quantile(sorted, 0.95);
+    stats.set(key, { count: agg.count, avgMin: Math.round(avg), p95Min: Math.round(p95) });
+  });
+
+  return { edges, stats };
 }
 
-export function simulatePairedLog(cfg: Partial<SimConfig> = {}) {
-  const c = { ...DEFAULT_SIM, ...cfg };
-  const rngA = seededRand(c.seed);
-  const rngB = seededRand(c.seed + 999);
-
-  const asIs: EventRow[] = [];
-  const toBe: EventRow[] = [];
-
-  for (let i = 0; i < c.nCases; i++) {
-    const caseId = genCaseId(i);
-    // volontairement deux RNG distincts => trajectoires différentes mais corrélées
-    asIs.push(...simulateCase(rngA, "AS_IS", caseId, AS_IS_MODEL));
-    toBe.push(...simulateCase(rngB, "TO_BE", caseId, TO_BE));
+function computeLeadTimes(traces: Trace[]) {
+  const leadMin: number[] = [];
+  for (const t of traces) {
+    if (t.events.length < 2) continue;
+    const start = t.events[0].ts;
+    const end = t.events[t.events.length - 1].ts;
+    leadMin.push(minutesBetween(start, end));
   }
-
-  return { asIs, toBe };
+  const sorted = [...leadMin].sort((a, b) => a - b);
+  const avg = sorted.reduce((s, x) => s + x, 0) / Math.max(1, sorted.length);
+  const p95 = quantile(sorted, 0.95);
+  return { avgMin: Math.round(avg), p95Min: Math.round(p95) };
 }
 
-// ------------------------------
-// Mining (DFG + stats + conformance)
-// ------------------------------
+function computeConformance(asIs: Trace[]) {
+  let total = 0;
+  let nonConform = 0;
 
-export function buildDFG(log: EventRow[], variant: Variant): DFG {
-  const nodes = new Map<
-    string,
-    {
-      activityId: string;
-      activity: string;
-      stage: Stage;
-      countEvents: number;
-      countTraces: number;
-      issues: Record<IssueFamily, number>;
-    }
-  >();
-
-  const edgeAgg = new Map<
-    string,
-    {
-      from: string;
-      to: string;
-      durs: number[];
-      count: number;
-    }
-  >();
-
-  // group by case
-  const byCase = new Map<string, EventRow[]>();
-  for (const e of log) {
-    if (e.variant !== variant) continue;
-    const arr = byCase.get(e.caseId) ?? [];
-    arr.push(e);
-    byCase.set(e.caseId, arr);
-  }
-
-  for (const [caseId, events] of byCase.entries()) {
-    events.sort((a, b) => a.idx - b.idx);
-
-    // traces per node
-    const seenInCase = new Set<string>();
-
-    for (let i = 0; i < events.length; i++) {
-      const cur = events[i];
-
-      const n = nodes.get(cur.activityId) ?? {
-        activityId: cur.activityId,
-        activity: cur.activity,
-        stage: cur.stage,
-        countEvents: 0,
-        countTraces: 0,
-        issues: {
-          qualite_conformite: 0,
-          donnees_continuite: 0,
-          organisation_flux: 0,
-          risque: 0,
-        },
-      };
-
-      n.countEvents += 1;
-      if (cur.issue) n.issues[cur.issue] += 1;
-
-      nodes.set(cur.activityId, n);
-
-      if (!seenInCase.has(cur.activityId)) {
-        seenInCase.add(cur.activityId);
-      }
-
-      // edges
-      if (i < events.length - 1) {
-        const nxt = events[i + 1];
-        const key = `${cur.activityId}→${nxt.activityId}`;
-        const a = edgeAgg.get(key) ?? {
-          from: cur.activityId,
-          to: nxt.activityId,
-          durs: [],
-          count: 0,
-        };
-        // duration between activities: take next start - current start (approx)
-        const dt = Math.max(1, nxt.tsMin - cur.tsMin);
-        a.count += 1;
-        a.durs.push(dt);
-        edgeAgg.set(key, a);
-      }
-    }
-
-    // finalize traces per node
-    for (const actId of seenInCase) {
-      const n = nodes.get(actId);
-      if (n) n.countTraces += 1;
+  for (const t of asIs) {
+    const e = t.events;
+    for (let i = 0; i < e.length - 1; i++) {
+      total += 1;
+      const key = `${e[i].nodeId}=>${e[i + 1].nodeId}`;
+      if (!ALLOWED_EDGE_SET.has(key)) nonConform += 1;
     }
   }
-
-  const edges = new Map<string, EdgeStats>();
-  for (const [k, a] of edgeAgg.entries()) {
-    const avg = mean(a.durs);
-    const p95 = percentile(a.durs, 95);
-    edges.set(k, {
-      from: a.from,
-      to: a.to,
-      count: a.count,
-      avgDurMin: avg,
-      p95DurMin: p95,
-    });
-  }
-
-  return { nodes, edges };
+  const conform = total === 0 ? 1 : (total - nonConform) / total;
+  return { conformPct: Math.round(conform * 100), total, nonConform };
 }
 
-export function computeCaseLeadTimes(log: EventRow[], variant: Variant): CaseStats[] {
-  const byCase = new Map<string, EventRow[]>();
-  for (const e of log) {
-    if (e.variant !== variant) continue;
-    const arr = byCase.get(e.caseId) ?? [];
-    arr.push(e);
-    byCase.set(e.caseId, arr);
+function topVariants(traces: Trace[], k = 6) {
+  const m = new Map<string, { count: number; example: Trace }>();
+  for (const t of traces) {
+    const seq = t.events.map((e) => e.nodeId).join(" > ");
+    const cur = m.get(seq);
+    if (!cur) m.set(seq, { count: 1, example: t });
+    else cur.count += 1;
   }
-
-  const allowed = modelAllowedEdgeSet(TO_BE);
-  const out: CaseStats[] = [];
-
-  for (const [caseId, events] of byCase.entries()) {
-    events.sort((a, b) => a.idx - b.idx);
-    const start = events[0]?.tsMin ?? 0;
-    const last = events[events.length - 1];
-    const end = (last?.tsMin ?? 0) + (last?.durationMin ?? 0);
-
-    let devEdges = 0;
-    let devTime = 0;
-
-    for (let i = 0; i < events.length - 1; i++) {
-      const a = events[i];
-      const b = events[i + 1];
-      const key = `${a.activityId}→${b.activityId}`;
-      if (!allowed.has(key)) {
-        devEdges += 1;
-        devTime += Math.max(1, b.tsMin - a.tsMin);
-      }
-    }
-
-    out.push({
-      caseId,
-      variant,
-      startMin: start,
-      endMin: end,
-      leadTimeMin: end - start,
-      deviationEdges: devEdges,
-      deviationTimeMin: devTime,
-    });
-  }
-
-  out.sort((a, b) => b.leadTimeMin - a.leadTimeMin);
-  return out;
+  return [...m.entries()]
+    .map(([seq, v]) => ({ seq, count: v.count, example: v.example }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, k);
 }
 
-export function computeEdgeStats(dfg: DFG): EdgeStats[] {
-  const arr = Array.from(dfg.edges.values());
-  arr.sort((a, b) => b.count - a.count);
-  return arr;
-}
+/** =========================
+ *  Layout (simple stage columns)
+ *  ========================= */
 
-export function computeResourcesAndCases(log: EventRow[], variant: Variant) {
-  const cases = new Set<string>();
-  const resources = new Map<string, number>();
-  for (const e of log) {
-    if (e.variant !== variant) continue;
-    cases.add(e.caseId);
-    resources.set(e.resource, (resources.get(e.resource) ?? 0) + 1);
-  }
-  const resList = Array.from(resources.entries()).sort((a, b) => b[1] - a[1]);
-  return { caseCount: cases.size, resources: resList };
-}
+const STAGE_ORDER: ProcNodeDef["stage"][] = [
+  "Inputs",
+  "Pre-process",
+  "Thermal",
+  "CFD",
+  "FEA",
+  "Review",
+  "Output",
+];
 
-export function pickDefaultFocus(cases: CaseStats[]) {
-  // pick worst lead time case
-  return cases[0]?.caseId ?? "";
-}
+function buildInitialLayout() {
+  const colX: Record<string, number> = {};
+  STAGE_ORDER.forEach((s, i) => (colX[s] = 40 + i * 260));
 
-// ------------------------------
-// Layout (simple columns + manual)
-// ------------------------------
+  // vertical stacking per stage
+  const stageY: Record<string, number> = {};
+  STAGE_ORDER.forEach((s) => (stageY[s] = 60));
 
-type ManualPos = Record<string, { x: number; y: number }>;
+  const nodes: Node[] = PROCESS_NODES.map((n) => {
+    const x = colX[n.stage];
+    const y = stageY[n.stage];
+    stageY[n.stage] += 120;
 
-export function buildStageColumns(width = 320) {
-  const xByStage = new Map<Stage, number>();
-  for (let i = 0; i < STAGE_COLUMNS.length; i++) {
-    xByStage.set(STAGE_COLUMNS[i], i * width);
-  }
-  return xByStage;
-}
-
-export function buildFullProcessGraph(model: ProcessModel, dfg?: DFG) {
-  const xByStage = buildStageColumns(320);
-  const nodes: Node<NodeData>[] = [];
-
-  // base nodes
-  const stageBuckets = new Map<Stage, typeof model.nodes>();
-  for (const n of model.nodes) {
-    const arr = stageBuckets.get(n.stage) ?? [];
-    arr.push(n);
-    stageBuckets.set(n.stage, arr);
-  }
-
-  for (const stage of STAGE_COLUMNS) {
-    const arr = stageBuckets.get(stage) ?? [];
-    for (let i = 0; i < arr.length; i++) {
-      const n = arr[i];
-      const stats = dfg?.nodes.get(n.id);
-      nodes.push({
-        id: n.id,
-        type: "activity",
-        position: {
-          x: xByStage.get(n.stage) ?? 0,
-          y: i * 140,
-        },
-        data: {
-          kind: "activity",
-          label: n.label,
-          stage: n.stage,
-          role: n.role,
-          tool: n.tool,
-          headcount: n.headcount,
-          traces: stats?.countTraces ?? 0,
-          eventsCount: stats?.countEvents ?? 0,
-          issues: stats?.issues ?? {
-            qualite_conformite: 0,
-            donnees_continuite: 0,
-            organisation_flux: 0,
-            risque: 0,
-          },
-        },
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
-      });
-    }
-  }
-
-  // edges
-  const edges: Edge[] = model.edges.map((e) => {
-    const key = `${e.from}→${e.to}`;
-    const stats = dfg?.edges.get(key);
     return {
-      id: key,
-      source: e.from,
-      target: e.to,
-      type: "smoothstep",
-      markerEnd: { type: MarkerType.ArrowClosed },
-      data: { stats },
+      id: n.id,
+      type: "default",
+      position: { x, y },
+      sourcePosition: Position.Right,
+      targetPosition: Position.Left,
+      data: {
+        title: n.title,
+        tool: n.tool,
+        team: n.team,
+        headcount: n.headcount,
+      },
+      style: {
+        width: 220,
+        borderRadius: 12,
+        border: "1px solid rgba(0,0,0,0.15)",
+        background: "white",
+        padding: 10,
+        fontSize: 12,
+      },
     };
   });
 
+  const edges: Edge[] = TO_BE_EDGES.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    type: "smoothstep",
+    animated: false,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
+    data: { baseLabel: e.label },
+    style: { strokeWidth: 2 },
+  }));
+
   return { nodes, edges };
 }
 
-export function applyManualPositions(nodes: Node<NodeData>[], manual: ManualPos) {
-  return nodes.map((n) => {
-    const m = manual[n.id];
-    if (!m) return n;
-    return { ...n, position: { x: m.x, y: m.y } };
-  });
+/** Token animation helpers */
+type Segment = { x1: number; y1: number; x2: number; y2: number; len: number };
+
+function centerOfNode(n: Node) {
+  const w = (n.style as any)?.width ?? 220;
+  const h = 70;
+  return { x: n.position.x + w / 2, y: n.position.y + h / 2 };
 }
 
-export function nearestStageX(stage: Stage) {
-  return buildStageColumns(320).get(stage) ?? 0;
-}
-
-// ------------------------------
-// Playback (token animation)
-// ------------------------------
-
-type Segment = { a: { x: number; y: number }; b: { x: number; y: number }; len: number };
-
-type PlaybackTrace = {
-  caseId: string;
-  activities: string[]; // activityIds in order
-};
-
-export function computePlaybackTrace(log: EventRow[], variant: Variant, caseId: string): PlaybackTrace {
-  const ev = log
-    .filter((e) => e.variant === variant && e.caseId === caseId)
-    .sort((a, b) => a.idx - b.idx);
-  return { caseId, activities: ev.map((e) => e.activityId) };
-}
-
-export function computePlaybackSegments(trace: PlaybackTrace, nodes: Node<NodeData>[]) {
-  const pos = new Map<string, { x: number; y: number }>();
-  for (const n of nodes) {
-    // centers (approx)
-    pos.set(n.id, { x: n.position.x + 140, y: n.position.y + 36 });
-  }
-
-  const pts: { x: number; y: number }[] = [];
-  for (const id of trace.activities) {
-    const p = pos.get(id);
-    if (p) pts.push(p);
-  }
-
+function computeSegmentsForTrace(nodesById: Map<string, Node>, trace: Trace): Segment[] {
   const segs: Segment[] = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    const a = pts[i];
-    const b = pts[i + 1];
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len = Math.max(1, Math.hypot(dx, dy));
-    segs.push({ a, b, len });
+  const seq = trace.events.map((e) => e.nodeId);
+  for (let i = 0; i < seq.length - 1; i++) {
+    const a = nodesById.get(seq[i]);
+    const b = nodesById.get(seq[i + 1]);
+    if (!a || !b) continue;
+    const ca = centerOfNode(a);
+    const cb = centerOfNode(b);
+    const dx = cb.x - ca.x;
+    const dy = cb.y - ca.y;
+    const len = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    segs.push({ x1: ca.x, y1: ca.y, x2: cb.x, y2: cb.y, len });
   }
-
-  return { pts, segs };
+  return segs;
 }
 
-export function posOnSegment(seg: Segment, t: number) {
-  const u = clamp(t, 0, 1);
-  return {
-    x: seg.a.x + (seg.b.x - seg.a.x) * u,
-    y: seg.a.y + (seg.b.y - seg.a.y) * u,
-  };
-}
-// ------------------------------
-// UI Components (nodes, panels)
-// ------------------------------
-
-function badgeText(k: IssueFamily) {
-  return ISSUE_FAMILIES[k].short;
+function posOnSegments(segs: Segment[], dist: number) {
+  let d = dist;
+  for (const s of segs) {
+    if (d <= s.len) {
+      const t = s.len === 0 ? 0 : d / s.len;
+      return { x: s.x1 + (s.x2 - s.x1) * t, y: s.y1 + (s.y2 - s.y1) * t };
+    }
+    d -= s.len;
+  }
+  const last = segs[segs.length - 1];
+  return last ? { x: last.x2, y: last.y2 } : { x: 0, y: 0 };
 }
 
-function issueTitle(k: IssueFamily) {
-  return ISSUE_FAMILIES[k].label;
+/** Safe type-guard for NodeChange with id */
+function hasId(change: NodeChange): change is NodeChange & { id: string } {
+  return typeof (change as any).id === "string";
 }
-
-function sumIssues(issues?: Record<IssueFamily, number>) {
-  if (!issues) return 0;
+export default function ProcessExplorer() {
   return (
-    (issues.qualite_conformite ?? 0) +
-    (issues.donnees_continuite ?? 0) +
-    (issues.organisation_flux ?? 0) +
-    (issues.risque ?? 0)
+    <ReactFlowProvider>
+      <ProcessExplorerInner />
+    </ReactFlowProvider>
   );
 }
 
-function ActivityNode({ data, selected }: { data: ActivityNodeData; selected: boolean }) {
-  const issuesTotal = sumIssues(data.issues);
+function ProcessExplorerInner() {
+  const initial = useMemo(() => buildInitialLayout(), []);
+
+  const [mode, setMode] = useState<Mode>("AS_IS");
+  const [labelMode, setLabelMode] = useState<LabelMode>("avg+p95");
+
+  const [cases, setCases] = useState(200);
+  const [seed, setSeed] = useState(7);
+
+  const [skipGates, setSkipGates] = useState(0.35);
+  const [manualTransfer, setManualTransfer] = useState(0.25);
+  const [uncontrolledLoops, setUncontrolledLoops] = useState(0.35);
+
+  const [focusNode, setFocusNode] = useState<string>("N_FLOW_FILL");
+  const [neighborsDepth, setNeighborsDepth] = useState<number>(99); // 99 = full graph (default)
+
+  const [nodes, setNodes] = useState<Node[]>(initial.nodes);
+  const [edges, setEdges] = useState<Edge[]>(initial.edges);
+
+  // keep manual positions when dragging
+  const manualPosRef = useRef<Map<string, { x: number; y: number }>>(new Map());
+
+  // Simulation results
+  const sim = useMemo(() => {
+    const params: SimParams = {
+      cases,
+      seed,
+      skipGates: clamp01(skipGates),
+      manualTransfer: clamp01(manualTransfer),
+      uncontrolledLoops: clamp01(uncontrolledLoops),
+    };
+    return simulatePairedLog(params);
+  }, [cases, seed, skipGates, manualTransfer, uncontrolledLoops]);
+
+  const traces = mode === "AS_IS" ? sim.asIs : sim.toBe;
+
+  const dfg = useMemo(() => buildDFG(traces), [traces]);
+  const lead = useMemo(() => computeLeadTimes(sim.asIs), [sim.asIs]);
+  const conf = useMemo(() => computeConformance(sim.asIs), [sim.asIs]);
+  const variants = useMemo(() => topVariants(traces, 6), [traces]);
+
+  // Derived: node stats (events, resources)
+  const nodeStats = useMemo(() => {
+    const m = new Map<string, { events: number; resources: Set<string>; issues: Map<IssueFamily, number> }>();
+    for (const t of traces) {
+      for (const e of t.events) {
+        const cur = m.get(e.nodeId) ?? {
+          events: 0,
+          resources: new Set<string>(),
+          issues: new Map<IssueFamily, number>(),
+        };
+        cur.events += 1;
+        cur.resources.add(e.resource);
+        if (e.issue) cur.issues.set(e.issue, (cur.issues.get(e.issue) ?? 0) + 1);
+        m.set(e.nodeId, cur);
+      }
+    }
+    return m;
+  }, [traces]);
+
+  // Apply stats to node labels and keep manual positions
+  useEffect(() => {
+    setNodes((prev) => {
+      const prevById = new Map(prev.map((n) => [n.id, n]));
+      return initial.nodes.map((n0) => {
+        const prevN = prevById.get(n0.id);
+        const manual = manualPosRef.current.get(n0.id);
+        const st = nodeStats.get(n0.id);
+        const eventsCount = st?.events ?? 0;
+        const resCount = st?.resources.size ?? 0;
+
+        // build compact “celonis-like” card
+        const title = (n0.data as any).title as string;
+        const tool = (n0.data as any).tool as string;
+        const team = (n0.data as any).team as string;
+        const head = (n0.data as any).headcount as number;
+
+        const issuesLine =
+          st && st.issues.size > 0
+            ? [...st.issues.entries()]
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 2)
+                .map(([k, v]) => `${ISSUE_LABEL[k]}: ${v}`)
+                .join(" • ")
+            : "—";
+
+        return {
+          ...n0,
+          position: manual ?? prevN?.position ?? n0.position,
+          data: {
+            ...n0.data,
+            __render: (
+              <div style={{ lineHeight: 1.2 }}>
+                <div style={{ fontWeight: 700, fontSize: 12 }}>{title}</div>
+                <div style={{ opacity: 0.85 }}>{tool}</div>
+                <div style={{ opacity: 0.7, marginTop: 6 }}>
+                  {team} • effectif {head}
+                </div>
+                <div style={{ marginTop: 8, display: "flex", gap: 10 }}>
+                  <span style={{ fontWeight: 600 }}>{eventsCount} events</span>
+                  <span style={{ opacity: 0.75 }}>{resCount} ressources</span>
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75 }}>Problèmes: {issuesLine}</div>
+              </div>
+            ),
+          },
+        };
+      });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodeStats]);
+
+  // Edge styles/labels for current mode + conformance (AS-IS vs TO-BE)
+  useEffect(() => {
+    setEdges((prev) => {
+      const byId = new Map(prev.map((e) => [e.id, e]));
+      // start from TO-BE edges baseline
+      const base = initial.edges.map((e0) => {
+        const prevE = byId.get(e0.id);
+        return { ...e0, ...prevE };
+      });
+
+      // add observed edges in AS-IS DFG if not present in TO-BE (optional, to show deviations)
+      const extra: Edge[] = [];
+      if (mode === "AS_IS") {
+        dfg.edges.forEach((agg, key) => {
+          const inToBe = ALLOWED_EDGE_SET.has(key);
+          if (inToBe) return;
+          // show a dashed “deviation” edge
+          extra.push({
+            id: `DEV_${key}`,
+            source: agg.source,
+            target: agg.target,
+            type: "smoothstep",
+            markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
+            style: { strokeWidth: 2, strokeDasharray: "6 4", opacity: 0.85 },
+            data: { baseLabel: "déviation" },
+          });
+        });
+      }
+
+      const all = [...base, ...extra];
+
+      // label based on current labelMode (use AS-IS stats for AS-IS; TO-BE is reference, still show counts from its traces)
+      const stats = dfg.stats;
+
+      return all.map((e) => {
+        const key = `${e.source}=>${e.target}`;
+        const st = stats.get(key);
+
+        let lbl = (e.data as any)?.baseLabel ?? "";
+        if (labelMode !== "none" && st) {
+          if (labelMode === "count") lbl = `${st.count}`;
+          else if (labelMode === "avg") lbl = `avg ${fmtHoursFromMin(st.avgMin)}`;
+          else if (labelMode === "p95") lbl = `p95 ${fmtHoursFromMin(st.p95Min)}`;
+          else lbl = `avg ${fmtHoursFromMin(st.avgMin)} • p95 ${fmtHoursFromMin(st.p95Min)}`;
+        }
+
+        const isAllowed = ALLOWED_EDGE_SET.has(key);
+        const isDeviation = mode === "AS_IS" && !isAllowed;
+
+        return {
+          ...e,
+          label: lbl,
+          animated: false,
+          style: {
+            ...(e.style ?? {}),
+            stroke: isDeviation ? "#d33" : "#222",
+            opacity: isDeviation ? 0.95 : 0.85,
+          },
+          labelStyle: {
+            fontSize: 11,
+            fill: isDeviation ? "#d33" : "#222",
+            fontWeight: 600,
+          },
+          labelBgStyle: {
+            fill: "rgba(255,255,255,0.9)",
+          },
+          labelBgPadding: [6, 3],
+          labelBgBorderRadius: 8,
+        };
+      });
+    });
+  }, [mode, labelMode, dfg, initial.edges]);
+
+  /** =========================
+   *  Local view (neighbors) filter
+   *  ========================= */
+  const filtered = useMemo(() => {
+    if (neighborsDepth >= 50) return { nodes, edges }; // full
+    const adj = new Map<string, string[]>();
+    for (const e of edges) {
+      const a = adj.get(e.source) ?? [];
+      a.push(e.target);
+      adj.set(e.source, a);
+      const b = adj.get(e.target) ?? [];
+      b.push(e.source);
+      adj.set(e.target, b);
+    }
+    const keep = new Set<string>();
+    const q: Array<{ id: string; d: number }> = [{ id: focusNode, d: 0 }];
+    keep.add(focusNode);
+    while (q.length) {
+      const cur = q.shift()!;
+      if (cur.d >= neighborsDepth) continue;
+      const neigh = adj.get(cur.id) ?? [];
+      for (const n of neigh) {
+        if (keep.has(n)) continue;
+        keep.add(n);
+        q.push({ id: n, d: cur.d + 1 });
+      }
+    }
+    const nn = nodes.filter((n) => keep.has(n.id) || n.id === "__token__");
+    const ee = edges.filter((e) => keep.has(e.source) && keep.has(e.target));
+    return { nodes: nn, edges: ee };
+  }, [nodes, edges, focusNode, neighborsDepth]);
+
+  /** =========================
+   *  Node click -> show events
+   *  ========================= */
+  const [tab, setTab] = useState<"events" | "traces" | "stats">("events");
+
+  const focusedEvents = useMemo(() => {
+    const all: Event[] = [];
+    for (const t of traces) for (const e of t.events) if (e.nodeId === focusNode) all.push(e);
+    // show latest first
+    return all.sort((a, b) => b.ts - a.ts).slice(0, 200);
+  }, [traces, focusNode]);
+
+  /** =========================
+   *  Token playback (one case)
+   *  ========================= */
+  const [play, setPlay] = useState(false);
+  const [playCaseIndex, setPlayCaseIndex] = useState(0);
+
+  const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+
+  const playTrace = useMemo(() => {
+    const t = traces[Math.max(0, Math.min(traces.length - 1, playCaseIndex))];
+    return t;
+  }, [traces, playCaseIndex]);
+
+  const playSegments = useMemo(() => {
+    if (!playTrace) return [];
+    return computeSegmentsForTrace(nodesById, playTrace);
+  }, [nodesById, playTrace]);
+
+  const totalLen = useMemo(() => playSegments.reduce((s, x) => s + x.len, 0), [playSegments]);
+  const rafRef = useRef<number | null>(null);
+  const distRef = useRef(0);
+  const lastTRef = useRef<number | null>(null);
+
+  // create/update token node
+  useEffect(() => {
+    setNodes((prev) => {
+      const has = prev.some((n) => n.id === "__token__");
+      if (!has) {
+        return [
+          ...prev,
+          {
+            id: "__token__",
+            type: "default",
+            position: { x: 0, y: 0 },
+            data: { __render: <div /> },
+            draggable: false,
+            selectable: false,
+            style: {
+              width: 16,
+              height: 16,
+              borderRadius: 999,
+              background: "#111",
+              border: "2px solid white",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+              padding: 0,
+            },
+          },
+        ];
+      }
+      return prev;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!play || playSegments.length === 0 || totalLen <= 1) return;
+
+    const tick = (t: number) => {
+      if (lastTRef.current == null) lastTRef.current = t;
+      const dt = Math.min(80, t - lastTRef.current); // ms
+      lastTRef.current = t;
+
+      // speed: pixels per second
+      const speed = 220; // tweak
+      distRef.current += (speed * dt) / 1000;
+
+      // loop
+      if (distRef.current > totalLen) distRef.current = 0;
+
+      const p = posOnSegments(playSegments, distRef.current);
+
+      setNodes((prev) =>
+        prev.map((n) => (n.id === "__token__" ? { ...n, position: { x: p.x - 8, y: p.y - 8 } } : n))
+      );
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+      lastTRef.current = null;
+    };
+  }, [play, playSegments, totalLen]);
+
+  /** =========================
+   *  ReactFlow callbacks
+   *  ========================= */
+  const onNodesChange = useCallback((changes: NodeChange[]) => {
+    // ignore token changes safely (some NodeChange variants do not have id)
+    const filtered = changes.filter((c) => !(hasId(c) && c.id === "__token__"));
+    setNodes((nds) => applyNodeChanges(filtered, nds));
+
+    // record manual positions for dragged nodes
+    for (const c of filtered) {
+      if (!hasId(c)) continue;
+      if ((c as any).type === "position" && (c as any).position) {
+        const p = (c as any).position as { x: number; y: number };
+        manualPosRef.current.set(c.id, p);
+      }
+    }
+  }, []);
+
+  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
+    setEdges((eds) => applyEdgeChanges(changes, eds));
+  }, []);
+
+  const onNodeClick = useCallback((_evt: any, node: Node) => {
+    if (node.id === "__token__") return;
+    setFocusNode(node.id);
+    setTab("events");
+  }, []);
+
+  /** =========================
+   *  UI
+   *  ========================= */
+  const regenerate = () => {
+    // change seed quickly
+    setSeed((s) => (s + 1) % 10000);
+  };
 
   return (
-    <div
-      style={{
-        width: 280,
-        borderRadius: 14,
-        border: selected ? "2px solid #111" : "1px solid #cfcfcf",
-        background: "#fff",
-        boxShadow: "0 6px 18px rgba(0,0,0,0.06)",
-        overflow: "hidden",
-        userSelect: "none",
-      }}
-    >
+    <div style={{ height: "100vh", width: "100vw", background: "#f6f7f9" }}>
+      {/* Top bar */}
       <div
         style={{
-          padding: "10px 12px",
-          background: selected ? "#111" : "#f6f6f6",
-          color: selected ? "#fff" : "#111",
-          fontSize: 12,
+          padding: "14px 16px",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: 8,
+          borderBottom: "1px solid rgba(0,0,0,0.08)",
+          background: "white",
         }}
       >
-        <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>{data.stage}</div>
-        <div style={{ opacity: selected ? 0.9 : 0.7, fontWeight: 600 }}>{data.role}</div>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 16 }}>Process Explorer</div>
+          <div style={{ opacity: 0.7, fontSize: 12 }}>
+            Mode AS-IS : rouge = transition non conforme au TO-BE. Clique un nœud pour voir les events.
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            onClick={() => setMode("AS_IS")}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 999,
+              border: "1px solid rgba(0,0,0,0.15)",
+              background: mode === "AS_IS" ? "#111" : "white",
+              color: mode === "AS_IS" ? "white" : "#111",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            AS-IS (simulé)
+          </button>
+          <button
+            onClick={() => setMode("TO_BE")}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 999,
+              border: "1px solid rgba(0,0,0,0.15)",
+              background: mode === "TO_BE" ? "#111" : "white",
+              color: mode === "TO_BE" ? "white" : "#111",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            TO-BE (référence)
+          </button>
+          <button
+            onClick={regenerate}
+            style={{
+              padding: "8px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(0,0,0,0.15)",
+              background: "white",
+              cursor: "pointer",
+              fontWeight: 700,
+            }}
+          >
+            Régénérer
+          </button>
+        </div>
       </div>
 
-      <div style={{ padding: "10px 12px" }}>
-        <div style={{ fontWeight: 800, fontSize: 13, lineHeight: 1.25, marginBottom: 6 }}>
-          {data.label}
-        </div>
+      {/* KPI row */}
+      <div style={{ padding: 14, display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12 }}>
+        <KpiCard title="Focus" value={nodeLabel(focusNode)} sub="Clique un nœud pour recentrer" />
+        <KpiCard title="Conformance (AS-IS vs TO-BE)" value={`${conf.conformPct}%`} sub={`${conf.nonConform}/${conf.total} transitions hors modèle`} />
+        <KpiCard title="Lead time (AS-IS)" value={`${fmtHoursFromMin(lead.avgMin)} avg`} sub={`p95 ${fmtHoursFromMin(lead.p95Min)}`} />
+        <KpiCard
+          title="Impact vs TO-BE"
+          value={`${fmtHoursFromMin(Math.max(0, lead.avgMin - computeLeadTimes(sim.toBe).avgMin))} avg/case`}
+          sub="delta lead time (simulé)"
+        />
+      </div>
 
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
-          {data.tool ? (
-            <span
-              style={{
-                fontSize: 11,
-                padding: "3px 8px",
-                borderRadius: 999,
-                border: "1px solid #e3e3e3",
-                background: "#fafafa",
-              }}
+      {/* Controls row */}
+      <div style={{ padding: 14, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+        <PanelCard title="Cas simulés">
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, opacity: 0.8 }}>
+            <span>Nombre</span>
+            <b>{cases}</b>
+          </div>
+          <input
+            type="range"
+            min={50}
+            max={500}
+            value={cases}
+            onChange={(e) => setCases(parseInt(e.target.value, 10))}
+            style={{ width: "100%" }}
+          />
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>Seed: {seed}</div>
+        </PanelCard>
+
+        <PanelCard title="Vue (arborescence)">
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, opacity: 0.8 }}>
+            <span>Profondeur voisins</span>
+            <b>{neighborsDepth >= 50 ? "complet" : neighborsDepth}</b>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={50}
+            value={Math.min(neighborsDepth, 50)}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              setNeighborsDepth(v >= 50 ? 99 : v);
+            }}
+            style={{ width: "100%" }}
+          />
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 6 }}>Recommandé : “complet” pour comprendre l’arborescence.</div>
+        </PanelCard>
+
+        <PanelCard title="Edge labels">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {(["avg+p95", "p95", "avg", "count", "none"] as LabelMode[]).map((m) => (
+              <button
+                key={m}
+                onClick={() => setLabelMode(m)}
+                style={{
+                  padding: "6px 10px",
+                  borderRadius: 999,
+                  border: "1px solid rgba(0,0,0,0.15)",
+                  background: labelMode === m ? "#111" : "white",
+                  color: labelMode === m ? "white" : "#111",
+                  cursor: "pointer",
+                  fontWeight: 700,
+                  fontSize: 12,
+                }}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.75, marginTop: 8 }}>Temps calculés via timestamps (transition time)</div>
+        </PanelCard>
+      </div>
+
+      {/* Deviation sliders */}
+      <div style={{ padding: "0 14px 14px 14px", display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+        <PanelCard title="Skip gates">
+          <SliderRow value={skipGates} setValue={setSkipGates} />
+        </PanelCard>
+        <PanelCard title="Manual transfer step">
+          <SliderRow value={manualTransfer} setValue={setManualTransfer} />
+        </PanelCard>
+        <PanelCard title="Uncontrolled NOK loops">
+          <SliderRow value={uncontrolledLoops} setValue={setUncontrolledLoops} />
+        </PanelCard>
+      </div>
+
+      {/* Main area */}
+      <div style={{ padding: 14, display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: 12, height: "calc(100vh - 360px)" }}>
+        <div style={{ background: "white", borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)", overflow: "hidden" }}>
+          <div style={{ height: "100%" }}>
+            <ReactFlow
+              nodes={filtered.nodes.map((n) =>
+                n.data?.__render
+                  ? {
+                      ...n,
+                      data: { label: n.data.__render },
+                    }
+                  : n
+              )}
+              edges={filtered.edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onNodeClick={onNodeClick}
+              fitView
+              nodesDraggable
+              nodesConnectable={false}
+              elementsSelectable
             >
-              {data.tool}
-            </span>
-          ) : null}
-
-          <span
-            style={{
-              fontSize: 11,
-              padding: "3px 8px",
-              borderRadius: 999,
-              border: "1px solid #e3e3e3",
-              background: "#fafafa",
-            }}
-            title="Effectif estimé sur l'activité"
-          >
-            👥 {data.headcount}
-          </span>
-
-          <span
-            style={{
-              fontSize: 11,
-              padding: "3px 8px",
-              borderRadius: 999,
-              border: "1px solid #e3e3e3",
-              background: "#fafafa",
-            }}
-            title="Nombre de traces qui passent par cette activité"
-          >
-            🧾 {data.traces ?? 0}
-          </span>
-
-          <span
-            style={{
-              fontSize: 11,
-              padding: "3px 8px",
-              borderRadius: 999,
-              border: "1px solid #e3e3e3",
-              background: "#fafafa",
-            }}
-            title="Nombre d'events (actions) agrégés"
-          >
-            ⚡ {data.eventsCount ?? 0}
-          </span>
+              <Background />
+              <Controls />
+              <MiniMap pannable zoomable />
+            </ReactFlow>
+          </div>
         </div>
 
-        {issuesTotal > 0 ? (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {(Object.keys(ISSUE_FAMILIES) as IssueFamily[]).map((k) => {
-              const v = data.issues?.[k] ?? 0;
-              if (!v) return null;
-              return (
-                <span
-                  key={k}
-                  title={`${issueTitle(k)}: ${v}`}
-                  style={{
-                    fontSize: 11,
-                    padding: "3px 8px",
-                    borderRadius: 999,
-                    border: "1px solid #ddd",
-                    background: "#fff",
-                  }}
-                >
-                  {badgeText(k)} {v}
-                </span>
-              );
-            })}
+        <div style={{ background: "white", borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)", overflow: "hidden" }}>
+          <div style={{ padding: 12, borderBottom: "1px solid rgba(0,0,0,0.08)", display: "flex", gap: 8 }}>
+            <TabBtn active={tab === "events"} onClick={() => setTab("events")} label="Events" />
+            <TabBtn active={tab === "traces"} onClick={() => setTab("traces")} label="Traces" />
+            <TabBtn active={tab === "stats"} onClick={() => setTab("stats")} label="Stats" />
           </div>
-        ) : (
-          <div style={{ fontSize: 11, opacity: 0.6 }}>
-            Aucun incident détecté sur cette activité.
-          </div>
-        )}
+
+          {tab === "events" && (
+            <div style={{ padding: 12, overflow: "auto", height: "100%" }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>{nodeLabel(focusNode)}</div>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10 }}>
+                Affiche les 200 derniers events pour ce nœud (mode {mode}).
+              </div>
+
+              {focusedEvents.length === 0 ? (
+                <div style={{ opacity: 0.7 }}>Aucun event sur ce nœud.</div>
+              ) : (
+                <div style={{ display: "grid", gap: 8 }}>
+                  {focusedEvents.map((e, idx) => (
+                    <div
+                      key={`${e.caseId}_${e.ts}_${idx}`}
+                      style={{
+                        border: "1px solid rgba(0,0,0,0.08)",
+                        borderRadius: 12,
+                        padding: 10,
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+                        <b style={{ fontSize: 12 }}>{e.caseId}</b>
+                        <span style={{ fontSize: 12, opacity: 0.7 }}>{new Date(e.ts).toLocaleString()}</span>
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 12 }}>
+                        <span style={{ fontWeight: 700 }}>{e.resource}</span>
+                        <span style={{ opacity: 0.7 }}> • {e.activity}</span>
+                      </div>
+                      {e.issue && (
+                        <div style={{ marginTop: 6, fontSize: 12, color: "#b11" }}>
+                          Problème: {ISSUE_LABEL[e.issue]}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "traces" && (
+            <div style={{ padding: 12, overflow: "auto", height: "100%" }}>
+              <div style={{ fontWeight: 800, marginBottom: 8 }}>Top variants</div>
+              <div style={{ fontSize: 12, opacity: 0.75, marginBottom: 10 }}>
+                Variantes les plus fréquentes (mode {mode}).
+              </div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                {variants.map((v, i) => (
+                  <div key={i} style={{ border: "1px solid rgba(0,0,0,0.08)", borderRadius: 12, padding: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between" }}>
+                      <b>{v.count} cas</b>
+                      <button
+                        onClick={() => {
+                          const idx = traces.findIndex((t) => t.caseId === v.example.caseId);
+                          setPlayCaseIndex(idx >= 0 ? idx : 0);
+                          setPlay(true);
+                        }}
+                        style={{
+                          padding: "6px 10px",
+                          borderRadius: 10,
+                          border: "1px solid rgba(0,0,0,0.15)",
+                          background: "white",
+                          cursor: "pointer",
+                          fontWeight: 800,
+                          fontSize: 12,
+                        }}
+                      >
+                        Lire (token)
+                      </button>
+                    </div>
+                    <div style={{ marginTop: 8, fontSize: 12, opacity: 0.85, whiteSpace: "pre-wrap" }}>
+                      {prettySeq(v.seq)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 14, borderTop: "1px solid rgba(0,0,0,0.08)", paddingTop: 12 }}>
+                <div style={{ fontWeight: 800, marginBottom: 8 }}>Playback</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <button
+                    onClick={() => setPlay((p) => !p)}
+                    style={{
+                      padding: "8px 10px",
+                      borderRadius: 10,
+                      border: "1px solid rgba(0,0,0,0.15)",
+                      background: play ? "#111" : "white",
+                      color: play ? "white" : "#111",
+                      cursor: "pointer",
+                      fontWeight: 900,
+                      fontSize: 12,
+                    }}
+                  >
+                    {play ? "Pause" : "Play"}
+                  </button>
+
+                  <span style={{ fontSize: 12, opacity: 0.75 }}>Case:</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={Math.max(0, traces.length - 1)}
+                    value={playCaseIndex}
+                    onChange={(e) => setPlayCaseIndex(parseInt(e.target.value || "0", 10))}
+                    style={{ width: 90, padding: "6px 8px", borderRadius: 10, border: "1px solid rgba(0,0,0,0.15)" }}
+                  />
+                </div>
+
+                {playTrace && (
+                  <div style={{ marginTop: 10, fontSize: 12, opacity: 0.85 }}>
+                    <b>{playTrace.caseId}</b>
+                    <div style={{ marginTop: 6 }}>{prettySeq(playTrace.events.map((e) => e.nodeId).join(" > "))}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {tab === "stats" && (
+            <div style={{ padding: 12, overflow: "auto", height: "100%" }}>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>Résumé</div>
+
+              <div style={{ display: "grid", gap: 10 }}>
+                <StatLine label="Mode" value={mode} />
+                <StatLine label="Cas simulés" value={String(cases)} />
+                <StatLine label="Conformance (AS-IS vs TO-BE)" value={`${conf.conformPct}%`} />
+                <StatLine label="Lead time (AS-IS avg)" value={fmtHoursFromMin(lead.avgMin)} />
+                <StatLine label="Lead time (AS-IS p95)" value={fmtHoursFromMin(lead.p95Min)} />
+              </div>
+
+              <div style={{ marginTop: 16, fontWeight: 800, marginBottom: 8 }}>Paramètres déviation</div>
+              <div style={{ display: "grid", gap: 10 }}>
+                <StatLine label="Skip gates" value={`${Math.round(skipGates * 100)}%`} />
+                <StatLine label="Manual transfer" value={`${Math.round(manualTransfer * 100)}%`} />
+                <StatLine label="Uncontrolled NOK loops" value={`${Math.round(uncontrolledLoops * 100)}%`} />
+              </div>
+
+              <div style={{ marginTop: 16, fontSize: 12, opacity: 0.75 }}>
+                Remarque : en mode AS-IS, les transitions non prévues par le TO-BE sont tracées en rouge / pointillées.
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-function TokenNode() {
+/** =========================
+ *  Small UI components
+ *  ========================= */
+
+function KpiCard(props: { title: string; value: string; sub: string }) {
   return (
-    <div
+    <div style={{ background: "white", borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)", padding: 14 }}>
+      <div style={{ fontSize: 12, opacity: 0.7 }}>{props.title}</div>
+      <div style={{ fontSize: 18, fontWeight: 900, marginTop: 6 }}>{props.value}</div>
+      <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>{props.sub}</div>
+    </div>
+  );
+}
+
+function PanelCard(props: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ background: "white", borderRadius: 16, border: "1px solid rgba(0,0,0,0.08)", padding: 14 }}>
+      <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10 }}>{props.title}</div>
+      {props.children}
+    </div>
+  );
+}
+
+function SliderRow(props: { value: number; setValue: (v: number) => void }) {
+  return (
+    <>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, opacity: 0.8 }}>
+        <span>Probabilité</span>
+        <b>{Math.round(props.value * 100)}%</b>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        value={Math.round(props.value * 100)}
+        onChange={(e) => props.setValue(parseInt(e.target.value, 10) / 100)}
+        style={{ width: "100%" }}
+      />
+    </>
+  );
+}
+
+function TabBtn(props: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button
+      onClick={props.onClick}
       style={{
-        width: 16,
-        height: 16,
+        padding: "8px 10px",
         borderRadius: 999,
-        background: "#111",
-        boxShadow: "0 8px 20px rgba(0,0,0,0.25)",
-        border: "2px solid #fff",
+        border: "1px solid rgba(0,0,0,0.15)",
+        background: props.active ? "#111" : "white",
+        color: props.active ? "white" : "#111",
+        cursor: "pointer",
+        fontWeight: 900,
+        fontSize: 12,
       }}
-    />
+    >
+      {props.label}
+    </button>
   );
 }
 
-const nodeTypes = {
-  activity: ({ data, selected }: any) => <ActivityNode data={data as ActivityNodeData} selected={selected} />,
-  token: () => <TokenNode />,
-};
-
-function edgeLabelFromStats(stats?: EdgeStats, mode: LabelMode = "avg+p95") {
-  if (!stats || mode === "none") return "";
-  if (mode === "count") return `${stats.count}`;
-  if (mode === "avg") return `moy ${fmtHoursFromMin(stats.avgDurMin)}`;
-  if (mode === "p95") return `p95 ${fmtHoursFromMin(stats.p95DurMin)}`;
-  return `${stats.count} • moy ${fmtHoursFromMin(stats.avgDurMin)} • p95 ${fmtHoursFromMin(stats.p95DurMin)}`;
-}
-
-function safeLocalStorageGet(key: string) {
-  try {
-    if (typeof window === "undefined") return null;
-    return window.localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function safeLocalStorageSet(key: string, value: string) {
-  try {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(key, value);
-  } catch {
-    // ignore
-  }
-}
-
-// ------------------------------
-// Main Component
-// ------------------------------
-
-export default function ProcessExplorer() {
-  const [mounted, setMounted] = useState(false);
-
-  // UI state
-  const [variant, setVariant] = useState<Variant>("AS_IS");
-  const [tab, setTab] = useState<Tab>("events");
-  const [labelMode, setLabelMode] = useState<LabelMode>("avg+p95");
-  const [showIssues, setShowIssues] = useState(true);
-
-  // Simulation
-  const [simCfg, setSimCfg] = useState<SimConfig>({ nCases: 40, seed: 42 });
-  const [{ asIs, toBe }, setLog] = useState(() => simulatePairedLog(simCfg));
-
-  // Mining
-  const dfgAsIs = useMemo(() => buildDFG(asIs, "AS_IS"), [asIs]);
-  const dfgToBe = useMemo(() => buildDFG(toBe, "TO_BE"), [toBe]);
-
-  const dfg = variant === "AS_IS" ? dfgAsIs : dfgToBe;
-  const model = variant === "AS_IS" ? AS_IS_MODEL : TO_BE;
-
-  const caseStats = useMemo(() => {
-    return computeCaseLeadTimes(variant === "AS_IS" ? asIs : toBe, variant);
-  }, [asIs, toBe, variant]);
-
-  const { caseCount, resources } = useMemo(() => {
-    return computeResourcesAndCases(variant === "AS_IS" ? asIs : toBe, variant);
-  }, [asIs, toBe, variant]);
-
-  const defaultFocus = useMemo(() => pickDefaultFocus(caseStats), [caseStats]);
-
-  // Selected
-  const [focusCaseId, setFocusCaseId] = useState<string>(defaultFocus);
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("be_cad");
-
-  // Manual layout persistence
-  const LS_KEY = "pm_manual_pos_v1";
-  const [manualPos, setManualPos] = useState<ManualPos>(() => {
-    const raw = safeLocalStorageGet(LS_KEY);
-    if (!raw) return {};
-    try {
-      return JSON.parse(raw) as ManualPos;
-    } catch {
-      return {};
-    }
-  });
-
-  // Build graph
-  const baseGraph = useMemo(() => {
-    return buildFullProcessGraph(model, dfg);
-  }, [model, dfg]);
-
-  const [rfNodes, setRfNodes] = useState<Node<NodeData>[]>(() => {
-    const n = applyManualPositions(baseGraph.nodes, manualPos);
-    // token node off-screen initial
-    return [
-      ...n,
-      {
-        id: "__token__",
-        type: "token",
-        position: { x: -10_000, y: -10_000 },
-        data: { kind: "token" },
-        draggable: false,
-        selectable: false,
-      },
-    ];
-  });
-
-  const [rfEdges, setRfEdges] = useState<Edge[]>(() => {
-    return baseGraph.edges.map((e) => ({
-      ...e,
-      label: edgeLabelFromStats((e.data as any)?.stats, labelMode),
-      labelStyle: { fontSize: 11, fontWeight: 700 },
-      style: { strokeWidth: 2 },
-    }));
-  });
-
-  // Refresh when model/dfg changes
-  useEffect(() => {
-    const built = buildFullProcessGraph(model, dfg);
-    const nodes = applyManualPositions(built.nodes, manualPos);
-
-    setRfNodes((prev) => {
-      const token = prev.find((n) => n.id === "__token__");
-      const tokenNode: Node<NodeData> =
-        token ??
-        ({
-          id: "__token__",
-          type: "token",
-          position: { x: -10_000, y: -10_000 },
-          data: { kind: "token" },
-          draggable: false,
-          selectable: false,
-        } as any);
-
-      return [...nodes, tokenNode];
-    });
-
-    setRfEdges(
-      built.edges.map((e) => ({
-        ...e,
-        label: edgeLabelFromStats((e.data as any)?.stats, labelMode),
-        labelStyle: { fontSize: 11, fontWeight: 700 },
-        style: { strokeWidth: 2 },
-      }))
-    );
-  }, [model, dfg, manualPos, labelMode]);
-
-  // Mount guard (avoid SSR/prerender issues)
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Persist manual positions
-  useEffect(() => {
-    safeLocalStorageSet(LS_KEY, JSON.stringify(manualPos));
-  }, [manualPos]);
-
-  // Sync focus case
-  useEffect(() => {
-    if (!focusCaseId) setFocusCaseId(defaultFocus);
-  }, [defaultFocus, focusCaseId]);
-
-  // Changes handlers
-  const onNodesChange = useCallback(
-    (changes: NodeChange[]) => {
-      // Filter out token changes (NodeChange union doesn't always have id)
-      const useful = changes.filter((c) => !("id" in c && c.id === "__token__"));
-
-      setRfNodes((nds) => applyNodeChanges(useful, nds));
-
-      // Persist drag positions
-      setManualPos((prev) => {
-        let next = prev;
-        for (const c of useful) {
-          if (!("id" in c)) continue;
-          if (c.type === "position" && (c as any).position) {
-            const pos = (c as any).position as { x: number; y: number };
-            if (!next) next = {};
-            next = { ...next, [c.id]: { x: pos.x, y: pos.y } };
-          }
-        }
-        return next;
-      });
-    },
-    [setRfNodes]
-  );
-
-  const onEdgesChange = useCallback((changes: EdgeChange[]) => {
-    setRfEdges((eds) => applyEdgeChanges(changes, eds));
-  }, []);
-
-  const onNodeClick = useCallback((_evt: any, node: Node<NodeData>) => {
-    if (node.id === "__token__") return;
-    setSelectedNodeId(node.id);
-    setTab("events");
-  }, []);
-
-  // ------------------------------
-  // Token animation
-  // ------------------------------
-
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(1.0); // 0.25..3
-
-  const rafRef = useRef<number | null>(null);
-  const progRef = useRef<{ segIdx: number; segT: number }>({ segIdx: 0, segT: 0 });
-
-  const replay = useCallback(() => {
-    progRef.current = { segIdx: 0, segT: 0 };
-  }, []);
-
-  useEffect(() => {
-    if (!mounted) return;
-    if (!playing) {
-      // hide token
-      setRfNodes((prev) =>
-        prev.map((n) =>
-          n.id === "__token__" ? { ...n, position: { x: -10_000, y: -10_000 } } : n
-        )
-      );
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-      return;
-    }
-
-    const trace = computePlaybackTrace(variant === "AS_IS" ? asIs : toBe, variant, focusCaseId);
-    const { segs } = computePlaybackSegments(trace, rfNodes);
-
-    if (segs.length === 0) return;
-
-    const step = () => {
-      const st = progRef.current;
-      const seg = segs[clamp(st.segIdx, 0, segs.length - 1)];
-
-      // advance by approx pixels per frame
-      const pxPerFrame = 6 * speed;
-      const dt = pxPerFrame / seg.len;
-      let t = st.segT + dt;
-      let i = st.segIdx;
-
-      while (t >= 1 && i < segs.length - 1) {
-        t = t - 1;
-        i += 1;
-      }
-
-      if (i === segs.length - 1 && t >= 1) {
-        // loop
-        i = 0;
-        t = 0;
-      }
-
-      progRef.current = { segIdx: i, segT: t };
-      const segNow = segs[i];
-      const p = posOnSegment(segNow, t);
-
-      setRfNodes((prev) =>
-        prev.map((n) =>
-          n.id === "__token__"
-            ? {
-                ...n,
-                position: { x: p.x - 8, y: p.y - 8 },
-              }
-            : n
-        )
-      );
-
-      rafRef.current = requestAnimationFrame(step);
-    };
-
-    rafRef.current = requestAnimationFrame(step);
-
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    };
-  }, [mounted, playing, speed, rfNodes, variant, focusCaseId, asIs, toBe]);
-
-  // ------------------------------
-  // Panels data
-  // ------------------------------
-
-  const selectedNode = useMemo(() => {
-    return rfNodes.find((n) => n.id === selectedNodeId) as Node<ActivityNodeData> | undefined;
-  }, [rfNodes, selectedNodeId]);
-
-  const nodeEvents = useMemo(() => {
-    const log = variant === "AS_IS" ? asIs : toBe;
-    const events = log
-      .filter((e) => e.variant === variant && e.activityId === selectedNodeId)
-      .sort((a, b) => a.tsMin - b.tsMin);
-
-    // optional: focus case highlight
-    return events;
-  }, [variant, asIs, toBe, selectedNodeId]);
-
-  const focusTraceEvents = useMemo(() => {
-    const log = variant === "AS_IS" ? asIs : toBe;
-    return log
-      .filter((e) => e.variant === variant && e.caseId === focusCaseId)
-      .sort((a, b) => a.idx - b.idx);
-  }, [variant, asIs, toBe, focusCaseId]);
-
-  const edgeStatsTop = useMemo(() => computeEdgeStats(dfg).slice(0, 12), [dfg]);
-
-  const allowed = useMemo(() => modelAllowedEdgeSet(TO_BE), []);
-
-  // Decorate edges with deviation (AS-IS vs TO-BE)
-  const decoratedEdges = useMemo(() => {
-    return rfEdges.map((e) => {
-      const key = `${e.source}→${e.target}`;
-      const dev = variant === "AS_IS" ? !allowed.has(key) : false;
-      return {
-        ...e,
-        animated: dev,
-        style: {
-          ...(e.style ?? {}),
-          stroke: dev ? "#c1121f" : "#111",
-          strokeDasharray: dev ? "6 4" : undefined,
-          opacity: dev ? 0.95 : 0.75,
-        },
-        label: edgeLabelFromStats((e.data as any)?.stats, labelMode),
-      } as Edge;
-    });
-  }, [rfEdges, allowed, variant, labelMode]);
-
-  // Run simulation
-  const runSim = useCallback(() => {
-    const next = simulatePairedLog(simCfg);
-    setLog(next);
-    setFocusCaseId("");
-    setSelectedNodeId("be_cad");
-    setPlaying(false);
-    replay();
-  }, [simCfg, replay]);
-
-  // Reset layout
-  const resetLayout = useCallback(() => {
-    setManualPos({});
-  }, []);
-
-  // ------------------------------
-  // Render
-  // ------------------------------
-
-  // Placeholder during prerender to avoid ReactFlow SSR issues.
-  if (!mounted) {
-    return (
-      <div style={{ padding: 16, fontFamily: "system-ui, Arial" }}>
-        Chargement du Process Explorer…
-      </div>
-    );
-  }
-
+function StatLine(props: { label: string; value: string }) {
   return (
-    <ReactFlowProvider>
-      <div
-        style={{
-          height: "calc(100vh - 24px)",
-          minHeight: 720,
-          display: "grid",
-          gridTemplateColumns: "1fr 360px",
-          gap: 12,
-          padding: 12,
-          background: "#f4f4f4",
-          fontFamily: "system-ui, Arial",
-        }}
-      >
-        {/* MAIN */}
-        <div
-          style={{
-            borderRadius: 18,
-            overflow: "hidden",
-            border: "1px solid #e5e5e5",
-            background: "#fff",
-            boxShadow: "0 12px 40px rgba(0,0,0,0.06)",
-            position: "relative",
-          }}
-        >
-          {/* Top bar */}
-          <div
-            style={{
-              position: "absolute",
-              top: 10,
-              left: 10,
-              right: 10,
-              zIndex: 20,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 10,
-              pointerEvents: "none",
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                padding: 10,
-                borderRadius: 14,
-                background: "rgba(255,255,255,0.92)",
-                border: "1px solid #e8e8e8",
-                boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
-                pointerEvents: "auto",
-              }}
-            >
-              <strong style={{ fontSize: 12 }}>Process Graph</strong>
-
-              <select
-                value={variant}
-                onChange={(e) => {
-                  setVariant(e.target.value as Variant);
-                  setPlaying(false);
-                  replay();
-                }}
-                style={{ fontSize: 12, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
-                title="Variante"
-              >
-                <option value="AS_IS">AS-IS</option>
-                <option value="TO_BE">TO-BE</option>
-              </select>
-
-              <select
-                value={labelMode}
-                onChange={(e) => setLabelMode(e.target.value as LabelMode)}
-                style={{ fontSize: 12, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
-                title="Etiquettes des transitions"
-              >
-                <option value="avg+p95">count + moy + p95</option>
-                <option value="count">count</option>
-                <option value="avg">moy</option>
-                <option value="p95">p95</option>
-                <option value="none">none</option>
-              </select>
-
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12 }}>
-                <input
-                  type="checkbox"
-                  checked={showIssues}
-                  onChange={(e) => setShowIssues(e.target.checked)}
-                />
-                Incidents
-              </label>
-
-              <button
-                onClick={() => {
-                  setPlaying((p) => !p);
-                  if (!playing) replay();
-                }}
-                style={{
-                  fontSize: 12,
-                  padding: "6px 10px",
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: "#111",
-                  color: "#fff",
-                  cursor: "pointer",
-                }}
-                title="Token animation"
-              >
-                {playing ? "Pause" : "Play"}
-              </button>
-
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
-                Vitesse
-                <input
-                  type="range"
-                  min={0.25}
-                  max={3}
-                  step={0.25}
-                  value={speed}
-                  onChange={(e) => setSpeed(Number(e.target.value))}
-                />
-                <span style={{ width: 32, textAlign: "right" }}>{speed.toFixed(2)}×</span>
-              </label>
-
-              <button
-                onClick={resetLayout}
-                style={{
-                  fontSize: 12,
-                  padding: "6px 10px",
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: "#fff",
-                  cursor: "pointer",
-                }}
-                title="Revenir au layout automatique (positions sauvegardées supprimées)"
-              >
-                Reset layout
-              </button>
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                gap: 8,
-                alignItems: "center",
-                padding: 10,
-                borderRadius: 14,
-                background: "rgba(255,255,255,0.92)",
-                border: "1px solid #e8e8e8",
-                boxShadow: "0 10px 28px rgba(0,0,0,0.08)",
-                pointerEvents: "auto",
-              }}
-            >
-              <span style={{ fontSize: 12, fontWeight: 700 }}>Simulation</span>
-              <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                Cas
-                <input
-                  type="number"
-                  value={simCfg.nCases}
-                  min={5}
-                  max={500}
-                  onChange={(e) => setSimCfg((p) => ({ ...p, nCases: Number(e.target.value) }))}
-                  style={{ width: 80, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
-                />
-              </label>
-              <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                Seed
-                <input
-                  type="number"
-                  value={simCfg.seed}
-                  onChange={(e) => setSimCfg((p) => ({ ...p, seed: Number(e.target.value) }))}
-                  style={{ width: 90, padding: "6px 8px", borderRadius: 10, border: "1px solid #ddd" }}
-                />
-              </label>
-              <button
-                onClick={runSim}
-                style={{
-                  fontSize: 12,
-                  padding: "6px 10px",
-                  borderRadius: 10,
-                  border: "1px solid #ddd",
-                  background: "#fff",
-                  cursor: "pointer",
-                }}
-              >
-                Re-simuler
-              </button>
-            </div>
-          </div>
-
-          <div style={{ height: "100%" }}>
-            <ReactFlow
-              nodes={rfNodes.map((n) => {
-                if (n.id === "__token__") return n;
-                const d = n.data as ActivityNodeData;
-                if (!showIssues) {
-                  return {
-                    ...n,
-                    data: { ...d, issues: { qualite_conformite: 0, donnees_continuite: 0, organisation_flux: 0, risque: 0 } },
-                  };
-                }
-                return n;
-              })}
-              edges={decoratedEdges}
-              nodeTypes={nodeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onNodeClick={onNodeClick}
-              fitView
-              minZoom={0.2}
-              maxZoom={1.5}
-              defaultViewport={{ x: 30, y: 40, zoom: 0.85 }}
-              proOptions={{ hideAttribution: true }}
-            >
-              <Background gap={20} size={1} />
-              <MiniMap pannable zoomable />
-              <Controls />
-            </ReactFlow>
-          </div>
-        </div>
-
-        {/* SIDE PANEL */}
-        <div
-          style={{
-            borderRadius: 18,
-            overflow: "hidden",
-            border: "1px solid #e5e5e5",
-            background: "#fff",
-            boxShadow: "0 12px 40px rgba(0,0,0,0.06)",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <div style={{ padding: 12, borderBottom: "1px solid #eee" }}>
-            <div style={{ fontSize: 12, opacity: 0.7 }}>Variante</div>
-            <div style={{ fontSize: 14, fontWeight: 900 }}>{model.title}</div>
-            <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <button
-                onClick={() => setTab("events")}
-                style={{
-                  flex: 1,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #ddd",
-                  background: tab === "events" ? "#111" : "#fff",
-                  color: tab === "events" ? "#fff" : "#111",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 800,
-                }}
-              >
-                Events
-              </button>
-              <button
-                onClick={() => setTab("traces")}
-                style={{
-                  flex: 1,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #ddd",
-                  background: tab === "traces" ? "#111" : "#fff",
-                  color: tab === "traces" ? "#fff" : "#111",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 800,
-                }}
-              >
-                Traces
-              </button>
-              <button
-                onClick={() => setTab("stats")}
-                style={{
-                  flex: 1,
-                  padding: "8px 10px",
-                  borderRadius: 12,
-                  border: "1px solid #ddd",
-                  background: tab === "stats" ? "#111" : "#fff",
-                  color: tab === "stats" ? "#fff" : "#111",
-                  cursor: "pointer",
-                  fontSize: 12,
-                  fontWeight: 800,
-                }}
-              >
-                Stats
-              </button>
-            </div>
-          </div>
-
-          <div style={{ padding: 12, overflow: "auto" }}>
-            {tab === "events" ? (
-              <>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Activité sélectionnée</div>
-                <div style={{ fontSize: 14, fontWeight: 900, marginBottom: 8 }}>
-                  {selectedNode?.data?.label ?? selectedNodeId}
-                </div>
-
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Focus trace</div>
-                <select
-                  value={focusCaseId}
-                  onChange={(e) => {
-                    setFocusCaseId(e.target.value);
-                    replay();
-                  }}
-                  style={{ width: "100%", padding: "10px 10px", borderRadius: 12, border: "1px solid #ddd" }}
-                >
-                  {caseStats.map((c) => (
-                    <option key={c.caseId} value={c.caseId}>
-                      {c.caseId} — {fmtDays8hFromMin(c.leadTimeMin)} — dev {c.deviationEdges}
-                    </option>
-                  ))}
-                </select>
-
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>Trace (ordre des boîtes)</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                  {focusTraceEvents.slice(0, 30).map((e) => (
-                    <div
-                      key={`${e.caseId}-${e.idx}`}
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: "1px solid #eee",
-                        background: e.activityId === selectedNodeId ? "#f1f1f1" : "#fff",
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 900 }}>
-                        {e.activityId} <span style={{ fontWeight: 600, opacity: 0.7 }}>({e.stage})</span>
-                      </div>
-                      <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        t={fmtHoursFromMin(e.tsMin)} • dur={fmtHoursFromMin(e.durationMin)} • {e.resource}
-                      </div>
-                      {e.issue ? (
-                        <div style={{ fontSize: 12, marginTop: 4 }}>
-                          Incident: <strong>{issueTitle(e.issue)}</strong>
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
-                  Events agrégés sur l’activité (toutes traces)
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                  {nodeEvents.slice(0, 40).map((e) => (
-                    <div
-                      key={`${e.caseId}-${e.idx}`}
-                      style={{
-                        padding: "8px 10px",
-                        borderRadius: 12,
-                        border: "1px solid #eee",
-                        background: e.caseId === focusCaseId ? "#f8f8f8" : "#fff",
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 900 }}>{e.caseId}</div>
-                      <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        t={fmtHoursFromMin(e.tsMin)} • dur={fmtHoursFromMin(e.durationMin)} • {e.resource}
-                      </div>
-                      {e.issue ? (
-                        <div style={{ fontSize: 12, marginTop: 4 }}>
-                          Incident: <strong>{issueTitle(e.issue)}</strong>
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              </>
-            ) : null}
-
-            {tab === "traces" ? (
-              <>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Résumé</div>
-                <div style={{ fontSize: 13, fontWeight: 900, marginBottom: 6 }}>
-                  {caseCount} cas • {resources.length} ressources
-                </div>
-
-                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>Top ressources (events)</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                  {resources.slice(0, 12).map(([r, c]) => (
-                    <div key={r} style={{ padding: "8px 10px", borderRadius: 12, border: "1px solid #eee" }}>
-                      <div style={{ fontSize: 12, fontWeight: 900 }}>{r}</div>
-                      <div style={{ fontSize: 12, opacity: 0.75 }}>{c} events</div>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>Cas (lead time décroissant)</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                  {caseStats.slice(0, 50).map((c) => (
-                    <button
-                      key={c.caseId}
-                      onClick={() => {
-                        setFocusCaseId(c.caseId);
-                        setTab("events");
-                        replay();
-                      }}
-                      style={{
-                        textAlign: "left",
-                        padding: "10px 10px",
-                        borderRadius: 12,
-                        border: "1px solid #eee",
-                        background: c.caseId === focusCaseId ? "#111" : "#fff",
-                        color: c.caseId === focusCaseId ? "#fff" : "#111",
-                        cursor: "pointer",
-                      }}
-                    >
-                      <div style={{ fontSize: 12, fontWeight: 900 }}>{c.caseId}</div>
-                      <div style={{ fontSize: 12, opacity: c.caseId === focusCaseId ? 0.85 : 0.75 }}>
-                        Lead time: {fmtDays8hFromMin(c.leadTimeMin)} • dev edges: {c.deviationEdges} • dev time: {fmtHoursFromMin(
-                          c.deviationTimeMin
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : null}
-
-            {tab === "stats" ? (
-              <>
-                <div style={{ fontSize: 12, opacity: 0.7 }}>Transitions les plus fréquentes (DFG)</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
-                  {edgeStatsTop.map((s) => (
-                    <div key={`${s.from}→${s.to}`} style={{ padding: "8px 10px", borderRadius: 12, border: "1px solid #eee" }}>
-                      <div style={{ fontSize: 12, fontWeight: 900 }}>
-                        {s.from} → {s.to}
-                      </div>
-                      <div style={{ fontSize: 12, opacity: 0.75 }}>
-                        {s.count} • moy {fmtHoursFromMin(s.avgDurMin)} • p95 {fmtHoursFromMin(s.p95DurMin)}
-                      </div>
-                      {variant === "AS_IS" && !allowed.has(`${s.from}→${s.to}`) ? (
-                        <div style={{ fontSize: 12, marginTop: 4 }}>
-                          Écart TO-BE: <strong>transition non prévue</strong>
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>Interprétation (ce que veut dire une “boîte”)</div>
-                <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.9 }}>
-                  Une boîte = une activité agrégée (ex: « BE — CAO paramétrée ») qui regroupe potentiellement des dizaines / centaines
-                  d’events (actions) : ouverture d’un modèle, modification paramètre, export STEP, check-in PLM, etc.
-                  <br />
-                  Les arêtes = transitions observées entre activités, annotées avec volume (count) et temps (moy/p95).
-                  <br />
-                  Les incidents (Q/D/O/R) = raisons typiques de NOK : qualité, continuité numérique, organisation/flux, risque.
-                </div>
-              </>
-            ) : null}
-          </div>
-        </div>
-
-        {/* Minimal CSS for ReactFlow (avoid global import) */}
-        <style jsx global>{`
-          .react-flow {
-            background: #ffffff;
-          }
-          .react-flow__attribution {
-            display: none;
-          }
-          .react-flow__controls button {
-            border-radius: 10px;
-            border: 1px solid #ddd;
-            box-shadow: 0 8px 18px rgba(0,0,0,0.08);
-            overflow: hidden;
-          }
-          .react-flow__minimap {
-            border-radius: 14px;
-            overflow: hidden;
-            border: 1px solid #e5e5e5;
-            box-shadow: 0 10px 24px rgba(0,0,0,0.08);
-          }
-          .react-flow__edge-path {
-            stroke: #111;
-            stroke-width: 2;
-          }
-          .react-flow__edge.animated .react-flow__edge-path {
-            stroke-dasharray: 6 4;
-          }
-          .react-flow__edge-text {
-            font-family: system-ui, Arial;
-          }
-        `}</style>
-      </div>
-    </ReactFlowProvider>
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 10, border: "1px solid rgba(0,0,0,0.08)", borderRadius: 12, padding: 10 }}>
+      <span style={{ fontSize: 12, opacity: 0.75 }}>{props.label}</span>
+      <b style={{ fontSize: 12 }}>{props.value}</b>
+    </div>
   );
+}
+
+function nodeLabel(nodeId: string) {
+  const n = PROCESS_NODES.find((x) => x.id === nodeId);
+  if (!n) return nodeId;
+  return `${n.title} (${n.tool})`;
+}
+
+function prettySeq(seq: string) {
+  // replace node ids by titles for readability
+  return seq
+    .split(" > ")
+    .map((id) => {
+      const n = PROCESS_NODES.find((x) => x.id === id);
+      return n ? n.title : id;
+    })
+    .join("  →  ");
 }
