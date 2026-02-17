@@ -1,9 +1,5 @@
-import dynamic from "next/dynamic";
-
-const ProcessExplorer = dynamic(() => import("../components/ProcessExplorer"), {
-  ssr: false,
-});
+import ClientProcessExplorer from "./ClientProcessExplorer";
 
 export default function Page() {
-  return <ProcessExplorer />;
+  return <ClientProcessExplorer />;
 }
