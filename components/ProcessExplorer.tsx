@@ -1696,3 +1696,162 @@ export default function ProcessExplorer() {
                         {e.activityId} <span style={{ fontWeight: 600, opacity: 0.7 }}>({e.stage})</span>
                       </div>
                       <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        t={fmtHoursFromMin(e.tsMin)} • dur={fmtHoursFromMin(e.durationMin)} • {e.resource}
+                      </div>
+                      {e.issue ? (
+                        <div style={{ fontSize: 12, marginTop: 4 }}>
+                          Incident: <strong>{issueTitle(e.issue)}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+                  Events agrégés sur l’activité (toutes traces)
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {nodeEvents.slice(0, 40).map((e) => (
+                    <div
+                      key={`${e.caseId}-${e.idx}`}
+                      style={{
+                        padding: "8px 10px",
+                        borderRadius: 12,
+                        border: "1px solid #eee",
+                        background: e.caseId === focusCaseId ? "#f8f8f8" : "#fff",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 900 }}>{e.caseId}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        t={fmtHoursFromMin(e.tsMin)} • dur={fmtHoursFromMin(e.durationMin)} • {e.resource}
+                      </div>
+                      {e.issue ? (
+                        <div style={{ fontSize: 12, marginTop: 4 }}>
+                          Incident: <strong>{issueTitle(e.issue)}</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {tab === "traces" ? (
+              <>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Résumé</div>
+                <div style={{ fontSize: 13, fontWeight: 900, marginBottom: 6 }}>
+                  {caseCount} cas • {resources.length} ressources
+                </div>
+
+                <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>Top ressources (events)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {resources.slice(0, 12).map(([r, c]) => (
+                    <div key={r} style={{ padding: "8px 10px", borderRadius: 12, border: "1px solid #eee" }}>
+                      <div style={{ fontSize: 12, fontWeight: 900 }}>{r}</div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>{c} events</div>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>Cas (lead time décroissant)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {caseStats.slice(0, 50).map((c) => (
+                    <button
+                      key={c.caseId}
+                      onClick={() => {
+                        setFocusCaseId(c.caseId);
+                        setTab("events");
+                        replay();
+                      }}
+                      style={{
+                        textAlign: "left",
+                        padding: "10px 10px",
+                        borderRadius: 12,
+                        border: "1px solid #eee",
+                        background: c.caseId === focusCaseId ? "#111" : "#fff",
+                        color: c.caseId === focusCaseId ? "#fff" : "#111",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 900 }}>{c.caseId}</div>
+                      <div style={{ fontSize: 12, opacity: c.caseId === focusCaseId ? 0.85 : 0.75 }}>
+                        Lead time: {fmtDays8hFromMin(c.leadTimeMin)} • dev edges: {c.deviationEdges} • dev time: {fmtHoursFromMin(
+                          c.deviationTimeMin
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
+
+            {tab === "stats" ? (
+              <>
+                <div style={{ fontSize: 12, opacity: 0.7 }}>Transitions les plus fréquentes (DFG)</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 6 }}>
+                  {edgeStatsTop.map((s) => (
+                    <div key={`${s.from}→${s.to}`} style={{ padding: "8px 10px", borderRadius: 12, border: "1px solid #eee" }}>
+                      <div style={{ fontSize: 12, fontWeight: 900 }}>
+                        {s.from} → {s.to}
+                      </div>
+                      <div style={{ fontSize: 12, opacity: 0.75 }}>
+                        {s.count} • moy {fmtHoursFromMin(s.avgDurMin)} • p95 {fmtHoursFromMin(s.p95DurMin)}
+                      </div>
+                      {variant === "AS_IS" && !allowed.has(`${s.from}→${s.to}`) ? (
+                        <div style={{ fontSize: 12, marginTop: 4 }}>
+                          Écart TO-BE: <strong>transition non prévue</strong>
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+
+                <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>Interprétation (ce que veut dire une “boîte”)</div>
+                <div style={{ fontSize: 12, lineHeight: 1.5, opacity: 0.9 }}>
+                  Une boîte = une activité agrégée (ex: « BE — CAO paramétrée ») qui regroupe potentiellement des dizaines / centaines
+                  d’events (actions) : ouverture d’un modèle, modification paramètre, export STEP, check-in PLM, etc.
+                  <br />
+                  Les arêtes = transitions observées entre activités, annotées avec volume (count) et temps (moy/p95).
+                  <br />
+                  Les incidents (Q/D/O/R) = raisons typiques de NOK : qualité, continuité numérique, organisation/flux, risque.
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Minimal CSS for ReactFlow (avoid global import) */}
+        <style jsx global>{`
+          .react-flow {
+            background: #ffffff;
+          }
+          .react-flow__attribution {
+            display: none;
+          }
+          .react-flow__controls button {
+            border-radius: 10px;
+            border: 1px solid #ddd;
+            box-shadow: 0 8px 18px rgba(0,0,0,0.08);
+            overflow: hidden;
+          }
+          .react-flow__minimap {
+            border-radius: 14px;
+            overflow: hidden;
+            border: 1px solid #e5e5e5;
+            box-shadow: 0 10px 24px rgba(0,0,0,0.08);
+          }
+          .react-flow__edge-path {
+            stroke: #111;
+            stroke-width: 2;
+          }
+          .react-flow__edge.animated .react-flow__edge-path {
+            stroke-dasharray: 6 4;
+          }
+          .react-flow__edge-text {
+            font-family: system-ui, Arial;
+          }
+        `}</style>
+      </div>
+    </ReactFlowProvider>
+  );
+}
