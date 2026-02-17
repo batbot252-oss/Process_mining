@@ -1,5 +1,12 @@
-import ClientProcessExplorer from "./ClientProcessExplorer";
+// app/page.tsx
+import ProcessExplorer from "../components/ProcessExplorer";
+
+export const dynamic = "force-dynamic";
 
 export default function Page() {
-  return <ClientProcessExplorer />;
+  return (
+    <main style={{ minHeight: "100vh" }}>
+      <ProcessExplorer />
+    </main>
+  );
 }
