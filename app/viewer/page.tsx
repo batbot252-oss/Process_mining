@@ -53,6 +53,7 @@ type BubbleOverride = {
   x?: number;
   y?: number;
   visible?: boolean;
+  deleted?: boolean;
 };
 
 const WIDTH = 1600;
@@ -153,7 +154,10 @@ const PILLAR_COLORS: Record<Pillar, string> = {
   GPE: "#c084fc",
 };
 
-const PILLAR_FRAMES: Record<Pillar, { x: number; y: number; w: number; h: number }> = {
+const PILLAR_FRAMES: Record<
+  Pillar,
+  { x: number; y: number; w: number; h: number }
+> = {
   PIECE: { x: 170, y: 145, w: 400, h: 755 },
   HP: { x: 600, y: 145, w: 400, h: 755 },
   GPE: { x: 1030, y: 145, w: 400, h: 755 },
@@ -310,7 +314,9 @@ export default function ViewerPage() {
     Record<string, BubbleOverride>
   >({});
 
-  const [selectedBubbleId, setSelectedBubbleId] = useState<string>("PIECE_LOD1_BE");
+  const [selectedBubbleId, setSelectedBubbleId] = useState<string>(
+    "PIECE_LOD1_BE"
+  );
 
   const [moveEnabled, setMoveEnabled] = useState(true);
   const [search, setSearch] = useState("");
@@ -318,7 +324,8 @@ export default function ViewerPage() {
   const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
   const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
 
-  const [newBubbleFamily, setNewBubbleFamily] = useState<BubbleFamily>("METIER");
+  const [newBubbleFamily, setNewBubbleFamily] =
+    useState<BubbleFamily>("METIER");
   const [newBubbleValue, setNewBubbleValue] = useState<string>("BE");
 
   useEffect(() => {
@@ -327,7 +334,9 @@ export default function ViewerPage() {
       const rawCustomBubbles = window.localStorage.getItem(LS_CUSTOM_BUBBLES);
 
       if (rawOverrides) {
-        setBubbleOverrides(JSON.parse(rawOverrides) as Record<string, BubbleOverride>);
+        setBubbleOverrides(
+          JSON.parse(rawOverrides) as Record<string, BubbleOverride>
+        );
       }
 
       if (rawCustomBubbles) {
@@ -380,18 +389,23 @@ export default function ViewerPage() {
         x: override?.x ?? bubble.x,
         y: override?.y ?? bubble.y,
         visible: override?.visible ?? bubble.visibleDefault,
+        deleted: override?.deleted ?? false,
       };
     });
   }, [allBaseBubbles, bubbleOverrides]);
 
   const selectedBubble = useMemo(() => {
-    return bubbles.find((bubble) => bubble.id === selectedBubbleId);
+    return bubbles.find(
+      (bubble) => bubble.id === selectedBubbleId && !bubble.deleted
+    );
   }, [bubbles, selectedBubbleId]);
 
   const filteredBubbles = useMemo(() => {
     const searchValue = search.toLowerCase().trim();
 
     return bubbles.filter((bubble) => {
+      if (bubble.deleted) return false;
+
       const matchSearch =
         searchValue.length === 0 ||
         bubble.label.toLowerCase().includes(searchValue) ||
@@ -399,7 +413,8 @@ export default function ViewerPage() {
         bubble.description.toLowerCase().includes(searchValue) ||
         bubble.family.toLowerCase().includes(searchValue);
 
-      const matchFamily = familyFilter === "ALL" || bubble.family === familyFilter;
+      const matchFamily =
+        familyFilter === "ALL" || bubble.family === familyFilter;
 
       const matchPillar =
         pillarFilter === "ALL" || bubble.pillar === pillarFilter || !bubble.pillar;
@@ -431,7 +446,7 @@ export default function ViewerPage() {
 
   function startDragBubble(
     event: ReactPointerEvent<SVGGElement>,
-    bubble: Bubble & { visible: boolean }
+    bubble: Bubble & { visible: boolean; deleted: boolean }
   ) {
     setSelectedBubbleId(bubble.id);
 
@@ -485,14 +500,14 @@ export default function ViewerPage() {
     }));
   }
 
-  function showFilteredBubbles() {
+  function setFilteredBubblesVisibility(visible: boolean) {
     setBubbleOverrides((previous) => {
       const next = { ...previous };
 
       for (const bubble of filteredBubbles) {
         next[bubble.id] = {
           ...next[bubble.id],
-          visible: true,
+          visible,
         };
       }
 
@@ -500,29 +515,18 @@ export default function ViewerPage() {
     });
   }
 
+  function showFilteredBubbles() {
+    setFilteredBubblesVisibility(true);
+  }
+
   function hideFilteredBubbles() {
-    setBubbleOverrides((previous) => {
-      const next = { ...previous };
-
-      for (const bubble of filteredBubbles) {
-        next[bubble.id] = {
-          ...next[bubble.id],
-          visible: false,
-        };
-      }
-
-      return next;
-    });
+    setFilteredBubblesVisibility(false);
   }
 
   function addCustomBubble() {
     const label = labelForFamilyValue(newBubbleFamily, newBubbleValue);
     const color = colorForFamilyValue(newBubbleFamily, newBubbleValue);
     const index = customBubbles.length;
-    const position = {
-      x: 1460,
-      y: 190 + (index % 12) * 48,
-    };
 
     const id = `CUSTOM_${Date.now()}_${Math.round(Math.random() * 100000)}`;
 
@@ -531,8 +535,8 @@ export default function ViewerPage() {
       label,
       subtitle: subtitleForFamilyValue(newBubbleFamily),
       family: newBubbleFamily,
-      x: position.x,
-      y: position.y,
+      x: 1460,
+      y: 190 + (index % 12) * 48,
       color,
       description: descriptionForFamilyValue(newBubbleFamily, newBubbleValue),
       visibleDefault: true,
@@ -543,17 +547,65 @@ export default function ViewerPage() {
     setSelectedBubbleId(id);
   }
 
-  function deleteCustomBubble(bubbleId: string) {
-    setCustomBubbles((previous) => previous.filter((bubble) => bubble.id !== bubbleId));
+  function deleteBubble(bubbleId: string) {
+    const bubble = bubbles.find((item) => item.id === bubbleId);
+
+    if (!bubble) return;
+
+    if (bubble.isCustom) {
+      setCustomBubbles((previous) =>
+        previous.filter((item) => item.id !== bubbleId)
+      );
+
+      setBubbleOverrides((previous) => {
+        const next = { ...previous };
+        delete next[bubbleId];
+        return next;
+      });
+    } else {
+      setBubbleOverrides((previous) => ({
+        ...previous,
+        [bubbleId]: {
+          ...previous[bubbleId],
+          visible: false,
+          deleted: true,
+        },
+      }));
+    }
+
+    if (selectedBubbleId === bubbleId) {
+      setSelectedBubbleId("");
+    }
+  }
+
+  function deleteFilteredBubbles() {
+    const idsToDelete = filteredBubbles.map((bubble) => bubble.id);
+    const idsToDeleteSet = new Set(idsToDelete);
+
+    setCustomBubbles((previous) =>
+      previous.filter((bubble) => !idsToDeleteSet.has(bubble.id))
+    );
 
     setBubbleOverrides((previous) => {
       const next = { ...previous };
-      delete next[bubbleId];
+
+      for (const bubble of filteredBubbles) {
+        if (bubble.isCustom) {
+          delete next[bubble.id];
+        } else {
+          next[bubble.id] = {
+            ...next[bubble.id],
+            visible: false,
+            deleted: true,
+          };
+        }
+      }
+
       return next;
     });
 
-    if (selectedBubbleId === bubbleId) {
-      setSelectedBubbleId("PIECE_LOD1_BE");
+    if (idsToDeleteSet.has(selectedBubbleId)) {
+      setSelectedBubbleId("");
     }
   }
 
@@ -562,8 +614,11 @@ export default function ViewerPage() {
       const next: Record<string, BubbleOverride> = {};
 
       for (const [bubbleId, override] of Object.entries(previous)) {
-        if (override.visible !== undefined) {
-          next[bubbleId] = { visible: override.visible };
+        if (override.visible !== undefined || override.deleted !== undefined) {
+          next[bubbleId] = {
+            visible: override.visible,
+            deleted: override.deleted,
+          };
         }
       }
 
@@ -661,7 +716,13 @@ export default function ViewerPage() {
             onPointerLeave={stopDraggingBubble}
           >
             <defs>
-              <filter id="bubbleGlow" x="-60%" y="-80%" width="220%" height="260%">
+              <filter
+                id="bubbleGlow"
+                x="-60%"
+                y="-80%"
+                width="220%"
+                height="260%"
+              >
                 <feGaussianBlur stdDeviation="3.8" result="coloredBlur" />
                 <feMerge>
                   <feMergeNode in="coloredBlur" />
@@ -741,7 +802,9 @@ export default function ViewerPage() {
                 <g
                   key={bubble.id}
                   transform={`translate(${bubble.x}, ${bubble.y})`}
-                  className={moveEnabled ? "bubbleGroup bubbleGroupMove" : "bubbleGroup"}
+                  className={
+                    moveEnabled ? "bubbleGroup bubbleGroupMove" : "bubbleGroup"
+                  }
                   onPointerDown={(event) => startDragBubble(event, bubble)}
                   filter={selected ? "url(#bubbleGlow)" : undefined}
                 >
@@ -753,7 +816,11 @@ export default function ViewerPage() {
                     rx={18}
                     fill={bubble.color}
                     stroke={
-                      selected ? "#ffffff" : hasCustomPosition ? "#facc15" : "rgba(255,255,255,0.28)"
+                      selected
+                        ? "#ffffff"
+                        : hasCustomPosition
+                          ? "#facc15"
+                          : "rgba(255,255,255,0.28)"
                     }
                     strokeWidth={selected ? 3.2 : hasCustomPosition ? 2.6 : 1.6}
                   />
@@ -765,11 +832,7 @@ export default function ViewerPage() {
                     fill="rgba(15,23,42,0.72)"
                   />
 
-                  <text
-                    x={-width / 2 + 32}
-                    y={4.5}
-                    className="bubbleText"
-                  >
+                  <text x={-width / 2 + 32} y={4.5} className="bubbleText">
                     {bubble.label}
                   </text>
                 </g>
@@ -821,15 +884,12 @@ export default function ViewerPage() {
                   <button onClick={() => setBubbleVisible(selectedBubble.id, false)}>
                     Masquer
                   </button>
-
-                  {selectedBubble.isCustom ? (
-                    <button
-                      className="dangerButton"
-                      onClick={() => deleteCustomBubble(selectedBubble.id)}
-                    >
-                      Supprimer
-                    </button>
-                  ) : null}
+                  <button
+                    className="dangerButton"
+                    onClick={() => deleteBubble(selectedBubble.id)}
+                  >
+                    Supprimer
+                  </button>
                 </div>
               </>
             ) : (
@@ -867,13 +927,28 @@ export default function ViewerPage() {
             </div>
 
             <p className="hint">
-              Les bulles ajoutées sont indépendantes. Tu peux donc ajouter plusieurs
+              Les bulles ajoutées sont indépendantes. Tu peux ajouter plusieurs
               fois CATIA, BE, ANSA, Inj_c, etc.
             </p>
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Bibliothèque des bulles</p>
+            <div className="libraryHeader">
+              <div>
+                <p className="panelLabel">Bibliothèque des bulles</p>
+                <p className="libraryCount">
+                  {filteredBubbles.length} bulle(s) dans la sélection
+                </p>
+              </div>
+
+              <div className="libraryActions">
+                <button onClick={showFilteredBubbles}>Tout cocher</button>
+                <button onClick={hideFilteredBubbles}>Tout décocher</button>
+                <button className="dangerButton" onClick={deleteFilteredBubbles}>
+                  Supprimer sélection
+                </button>
+              </div>
+            </div>
 
             <div className="bubbleList">
               {filteredBubbles.length === 0 ? (
@@ -902,16 +977,26 @@ export default function ViewerPage() {
                       </span>
                     </button>
 
-                    <label className="visibilityToggle">
-                      <input
-                        type="checkbox"
-                        checked={bubble.visible}
-                        onChange={(event) =>
-                          setBubbleVisible(bubble.id, event.target.checked)
-                        }
-                      />
-                      <span>{bubble.visible ? "Visible" : "Masquée"}</span>
-                    </label>
+                    <div className="bubbleListControls">
+                      <label className="visibilityToggle">
+                        <input
+                          type="checkbox"
+                          checked={bubble.visible}
+                          onChange={(event) =>
+                            setBubbleVisible(bubble.id, event.target.checked)
+                          }
+                        />
+                        <span>{bubble.visible ? "Visible" : "Masquée"}</span>
+                      </label>
+
+                      <button
+                        className="miniDeleteButton"
+                        onClick={() => deleteBubble(bubble.id)}
+                        title="Supprimer la bulle"
+                      >
+                        Suppr.
+                      </button>
+                    </div>
                   </div>
                 ))
               )}
@@ -932,13 +1017,13 @@ export default function ViewerPage() {
                 <strong>Bulles libres</strong> : métiers, outils et métiers simulation.
               </li>
               <li>
-                <strong>Affichage libre</strong> : chaque bulle peut être visible ou masquée.
+                <strong>Cocher / décocher</strong> : chaque bulle peut être affichée ou masquée.
               </li>
               <li>
-                <strong>Placement libre</strong> : chaque bulle peut être déplacée où tu veux.
+                <strong>Supprimer</strong> : une bulle supprimée disparaît de la bibliothèque.
               </li>
               <li>
-                <strong>Contour jaune</strong> : bulle repositionnée manuellement.
+                <strong>Réinit. total</strong> : restaure toutes les bulles par défaut.
               </li>
             </ul>
           </div>
@@ -1002,7 +1087,9 @@ export default function ViewerPage() {
         .toolbar button,
         .addBubbleGrid select,
         .addBubbleGrid button,
-        .selectedActions button {
+        .selectedActions button,
+        .libraryActions button,
+        .miniDeleteButton {
           border: 1px solid rgba(148, 163, 184, 0.28);
           background: rgba(15, 23, 42, 0.84);
           color: #e5e7eb;
@@ -1018,7 +1105,9 @@ export default function ViewerPage() {
 
         .toolbar button,
         .addBubbleGrid button,
-        .selectedActions button {
+        .selectedActions button,
+        .libraryActions button,
+        .miniDeleteButton {
           cursor: pointer;
           font-weight: 800;
           background: rgba(37, 99, 235, 0.34);
@@ -1030,9 +1119,16 @@ export default function ViewerPage() {
           color: #fef9c3;
         }
 
+        .dangerButton,
+        .selectedActions .dangerButton,
+        .libraryActions .dangerButton {
+          background: rgba(220, 38, 38, 0.32);
+          border-color: rgba(248, 113, 113, 0.42);
+        }
+
         .layout {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 410px;
+          grid-template-columns: minmax(0, 1fr) 430px;
           gap: 18px;
           align-items: stretch;
         }
@@ -1144,6 +1240,37 @@ export default function ViewerPage() {
           letter-spacing: 0.13em;
         }
 
+        .libraryHeader {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 12px;
+          margin-bottom: 12px;
+        }
+
+        .libraryHeader .panelLabel {
+          margin-bottom: 4px;
+        }
+
+        .libraryCount {
+          margin: 0;
+          font-size: 12px;
+          color: #94a3b8;
+        }
+
+        .libraryActions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          gap: 7px;
+        }
+
+        .libraryActions button {
+          padding: 8px 9px;
+          font-size: 12px;
+          border-radius: 10px;
+        }
+
         .selectedHeader {
           display: flex;
           align-items: flex-start;
@@ -1211,11 +1338,6 @@ export default function ViewerPage() {
           gap: 8px;
         }
 
-        .selectedActions .dangerButton {
-          background: rgba(220, 38, 38, 0.32);
-          border-color: rgba(248, 113, 113, 0.42);
-        }
-
         .addBubbleGrid {
           display: grid;
           grid-template-columns: 1fr 1fr auto;
@@ -1233,7 +1355,7 @@ export default function ViewerPage() {
           display: flex;
           flex-direction: column;
           gap: 8px;
-          max-height: 340px;
+          max-height: 360px;
           overflow: auto;
           padding-right: 4px;
         }
@@ -1285,6 +1407,12 @@ export default function ViewerPage() {
           font-size: 12px;
         }
 
+        .bubbleListControls {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
         .visibilityToggle {
           display: flex;
           align-items: center;
@@ -1296,6 +1424,14 @@ export default function ViewerPage() {
 
         .visibilityToggle input {
           accent-color: #38bdf8;
+        }
+
+        .miniDeleteButton {
+          padding: 7px 8px;
+          font-size: 11.5px;
+          border-radius: 10px;
+          background: rgba(220, 38, 38, 0.28);
+          border-color: rgba(248, 113, 113, 0.35);
         }
 
         .empty {
@@ -1331,6 +1467,14 @@ export default function ViewerPage() {
 
           .addBubbleGrid {
             grid-template-columns: 1fr;
+          }
+
+          .libraryHeader {
+            flex-direction: column;
+          }
+
+          .libraryActions {
+            justify-content: flex-start;
           }
         }
       `}</style>
