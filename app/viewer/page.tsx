@@ -97,9 +97,9 @@ type ResolvedBubbleLink = BubbleLink & {
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v3";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v3";
-const LS_BUBBLE_LINKS = "plm_free_bubble_links_v1";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v4";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v4";
+const LS_BUBBLE_LINKS = "plm_free_bubble_links_v2";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -451,6 +451,9 @@ export default function ViewerPage() {
     "LOD1_PIECE_BE"
   );
 
+  const [linkMode, setLinkMode] = useState(false);
+  const [linkSelectionIds, setLinkSelectionIds] = useState<string[]>([]);
+
   const [moveEnabled, setMoveEnabled] = useState(true);
   const [search, setSearch] = useState("");
   const [familyFilter, setFamilyFilter] = useState<BubbleFamily | "ALL">("ALL");
@@ -462,7 +465,6 @@ export default function ViewerPage() {
   const [freeBubbleText, setFreeBubbleText] = useState<string>("Nouvelle bulle");
   const [freeBubbleColor, setFreeBubbleColor] = useState<string>("#facc15");
 
-  const [linkTargetId, setLinkTargetId] = useState<string>("");
   const [linkLabel, setLinkLabel] = useState<string>("Lien");
   const [linkColor, setLinkColor] = useState<string>("#cbd5e1");
 
@@ -552,6 +554,7 @@ export default function ViewerPage() {
 
   function changeActiveLod(nextLod: LOD) {
     setActiveLod(nextLod);
+    setLinkSelectionIds([]);
 
     const firstVisibleBubbleForLod = bubbles.find(
       (bubble) => bubble.lod === nextLod && !bubble.deleted && bubble.visible
@@ -578,24 +581,13 @@ export default function ViewerPage() {
     );
   }, [bubbles, selectedBubbleId]);
 
-  const linkTargetOptions = useMemo(() => {
-    return activeLodBubbles.filter((bubble) => bubble.id !== selectedBubbleId);
-  }, [activeLodBubbles, selectedBubbleId]);
-
-  useEffect(() => {
-    if (linkTargetOptions.length === 0) {
-      setLinkTargetId("");
-      return;
-    }
-
-    const targetStillAvailable = linkTargetOptions.some(
-      (bubble) => bubble.id === linkTargetId
-    );
-
-    if (!targetStillAvailable) {
-      setLinkTargetId(linkTargetOptions[0].id);
-    }
-  }, [linkTargetOptions, linkTargetId]);
+  const selectedLinkBubbles = useMemo(() => {
+    return linkSelectionIds
+      .map((id) => bubbleById.get(id))
+      .filter((bubble): bubble is BubbleView => {
+        return Boolean(bubble && !bubble.deleted && bubble.lod === activeLod);
+      });
+  }, [linkSelectionIds, bubbleById, activeLod]);
 
   const filteredBubbles = useMemo(() => {
     const searchValue = search.toLowerCase().trim();
@@ -648,6 +640,21 @@ export default function ViewerPage() {
     return activeLodLinks.filter((link) => link.source.visible && link.target.visible);
   }, [activeLodLinks]);
 
+  const selectedPairExistingLinks = useMemo(() => {
+    if (selectedLinkBubbles.length !== 2) return [];
+
+    const [first, second] = selectedLinkBubbles;
+
+    return activeLodLinks.filter((link) => {
+      const sameDirection =
+        link.sourceId === first.id && link.targetId === second.id;
+      const reverseDirection =
+        link.sourceId === second.id && link.targetId === first.id;
+
+      return sameDirection || reverseDirection;
+    });
+  }, [selectedLinkBubbles, activeLodLinks]);
+
   function getSvgPoint(event: ReactPointerEvent<SVGElement>): Position {
     const svg = svgRef.current;
 
@@ -663,11 +670,36 @@ export default function ViewerPage() {
     };
   }
 
+  function selectBubbleForLink(bubbleId: string) {
+    const bubble = bubbleById.get(bubbleId);
+
+    if (!bubble || bubble.deleted || bubble.lod !== activeLod) return;
+
+    setLinkSelectionIds((previous) => {
+      if (previous.includes(bubbleId)) {
+        return previous.filter((id) => id !== bubbleId);
+      }
+
+      if (previous.length >= 2) {
+        return [bubbleId];
+      }
+
+      return [...previous, bubbleId];
+    });
+  }
+
   function startDragBubble(
     event: ReactPointerEvent<SVGGElement>,
     bubble: BubbleView
   ) {
     setSelectedBubbleId(bubble.id);
+
+    if (linkMode) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectBubbleForLink(bubble.id);
+      return;
+    }
 
     if (!moveEnabled) return;
 
@@ -688,7 +720,7 @@ export default function ViewerPage() {
   function moveDraggedBubble(event: ReactPointerEvent<SVGSVGElement>) {
     const draggingBubbleId = draggingBubbleIdRef.current;
 
-    if (!draggingBubbleId || !moveEnabled) return;
+    if (!draggingBubbleId || !moveEnabled || linkMode) return;
 
     const point = getSvgPoint(event);
 
@@ -778,14 +810,10 @@ export default function ViewerPage() {
     setSelectedBubbleId(id);
   }
 
-  function createLinkFromSelectedBubble() {
-    if (!selectedBubble) return;
-    if (!linkTargetId) return;
-    if (selectedBubble.id === linkTargetId) return;
+  function createLinkBetweenSelectedBubbles() {
+    if (selectedLinkBubbles.length !== 2) return;
 
-    const targetBubble = bubbleById.get(linkTargetId);
-
-    if (!targetBubble || targetBubble.deleted) return;
+    const [source, target] = selectedLinkBubbles;
 
     const id = `LINK_${activeLod}_${Date.now()}_${Math.round(
       Math.random() * 100000
@@ -794,13 +822,36 @@ export default function ViewerPage() {
     const nextLink: BubbleLink = {
       id,
       lod: activeLod,
-      sourceId: selectedBubble.id,
-      targetId: targetBubble.id,
+      sourceId: source.id,
+      targetId: target.id,
       label: linkLabel.trim() || "Lien",
       color: linkColor,
     };
 
     setBubbleLinks((previous) => [...previous, nextLink]);
+  }
+
+  function breakLinkBetweenSelectedBubbles() {
+    if (selectedLinkBubbles.length !== 2) return;
+
+    const [first, second] = selectedLinkBubbles;
+
+    setBubbleLinks((previous) =>
+      previous.filter((link) => {
+        if (link.lod !== activeLod) return true;
+
+        const sameDirection =
+          link.sourceId === first.id && link.targetId === second.id;
+        const reverseDirection =
+          link.sourceId === second.id && link.targetId === first.id;
+
+        return !(sameDirection || reverseDirection);
+      })
+    );
+  }
+
+  function clearLinkSelection() {
+    setLinkSelectionIds([]);
   }
 
   function deleteLink(linkId: string) {
@@ -809,6 +860,7 @@ export default function ViewerPage() {
 
   function deleteAllActiveLodLinks() {
     setBubbleLinks((previous) => previous.filter((link) => link.lod !== activeLod));
+    setLinkSelectionIds([]);
   }
 
   function deleteBubble(bubbleId: string) {
@@ -842,6 +894,8 @@ export default function ViewerPage() {
         (link) => link.sourceId !== bubbleId && link.targetId !== bubbleId
       )
     );
+
+    setLinkSelectionIds((previous) => previous.filter((id) => id !== bubbleId));
 
     if (selectedBubbleId === bubbleId) {
       setSelectedBubbleId("");
@@ -879,6 +933,10 @@ export default function ViewerPage() {
         (link) =>
           !idsToDeleteSet.has(link.sourceId) && !idsToDeleteSet.has(link.targetId)
       )
+    );
+
+    setLinkSelectionIds((previous) =>
+      previous.filter((id) => !idsToDeleteSet.has(id))
     );
 
     if (idsToDeleteSet.has(selectedBubbleId)) {
@@ -924,6 +982,8 @@ export default function ViewerPage() {
     setPillarFilter("ALL");
     setActiveLod("LOD1");
     setSelectedBubbleId("LOD1_PIECE_BE");
+    setLinkSelectionIds([]);
+    setLinkMode(false);
     setFreeBubbleText("Nouvelle bulle");
     setFreeBubbleColor("#facc15");
     setLinkLabel("Lien");
@@ -945,8 +1005,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.7</p>
-          <h1>Placement libre par LOD avec liens entre bulles</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.8</p>
+          <h1>Placement libre par LOD avec création de liens par sélection</h1>
         </div>
 
         <div className="toolbar">
@@ -984,10 +1044,20 @@ export default function ViewerPage() {
           </select>
 
           <button
-            className={moveEnabled ? "activeButton" : ""}
+            className={moveEnabled && !linkMode ? "activeButton" : ""}
             onClick={() => setMoveEnabled((current) => !current)}
           >
             {moveEnabled ? "Déplacement actif" : "Déplacement verrouillé"}
+          </button>
+
+          <button
+            className={linkMode ? "linkModeButtonActive" : ""}
+            onClick={() => {
+              setLinkMode((current) => !current);
+              setLinkSelectionIds([]);
+            }}
+          >
+            {linkMode ? "Mode lien actif" : "Mode lien"}
           </button>
 
           <button onClick={showFilteredBubbles}>Afficher sélection</button>
@@ -1021,12 +1091,25 @@ export default function ViewerPage() {
         })}
       </section>
 
+      {linkMode ? (
+        <section className="linkModeBanner">
+          Mode lien actif : clique sur deux bulles dans le viewer, puis utilise
+          “Créer lien” ou “Casser lien”.
+        </section>
+      ) : null}
+
       <section className="layout">
         <div className="graphCard">
           <svg
             ref={svgRef}
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            className={moveEnabled ? "graphSvg graphSvgMove" : "graphSvg"}
+            className={
+              linkMode
+                ? "graphSvg graphSvgLinkMode"
+                : moveEnabled
+                  ? "graphSvg graphSvgMove"
+                  : "graphSvg"
+            }
             role="img"
             onPointerMove={moveDraggedBubble}
             onPointerUp={stopDraggingBubble}
@@ -1145,6 +1228,7 @@ export default function ViewerPage() {
             {visibleBubbles.map((bubble) => {
               const width = bubbleWidth(bubble.label);
               const selected = selectedBubbleId === bubble.id;
+              const isLinkSelected = linkSelectionIds.includes(bubble.id);
               const hasCustomPosition =
                 bubbleOverrides[bubble.id]?.x !== undefined ||
                 bubbleOverrides[bubble.id]?.y !== undefined;
@@ -1154,10 +1238,14 @@ export default function ViewerPage() {
                   key={bubble.id}
                   transform={`translate(${bubble.x}, ${bubble.y})`}
                   className={
-                    moveEnabled ? "bubbleGroup bubbleGroupMove" : "bubbleGroup"
+                    linkMode
+                      ? "bubbleGroup bubbleGroupLinkMode"
+                      : moveEnabled
+                        ? "bubbleGroup bubbleGroupMove"
+                        : "bubbleGroup"
                   }
                   onPointerDown={(event) => startDragBubble(event, bubble)}
-                  filter={selected ? "url(#bubbleGlow)" : undefined}
+                  filter={selected || isLinkSelected ? "url(#bubbleGlow)" : undefined}
                 >
                   <rect
                     x={-width / 2}
@@ -1167,14 +1255,46 @@ export default function ViewerPage() {
                     rx={18}
                     fill={bubble.color}
                     stroke={
-                      selected
-                        ? "#ffffff"
-                        : hasCustomPosition
-                          ? "#facc15"
-                          : "rgba(255,255,255,0.28)"
+                      isLinkSelected
+                        ? "#22d3ee"
+                        : selected
+                          ? "#ffffff"
+                          : hasCustomPosition
+                            ? "#facc15"
+                            : "rgba(255,255,255,0.28)"
                     }
-                    strokeWidth={selected ? 3.2 : hasCustomPosition ? 2.6 : 1.6}
+                    strokeWidth={
+                      isLinkSelected
+                        ? 4
+                        : selected
+                          ? 3.2
+                          : hasCustomPosition
+                            ? 2.6
+                            : 1.6
+                    }
                   />
+
+                  {isLinkSelected ? (
+                    <circle
+                      cx={width / 2 - 11}
+                      cy={-13}
+                      r={10}
+                      fill="#22d3ee"
+                      stroke="#020617"
+                      strokeWidth={2}
+                    />
+                  ) : null}
+
+                  {isLinkSelected ? (
+                    <text
+                      x={width / 2 - 11}
+                      y={-9}
+                      textAnchor="middle"
+                      className="linkOrderText"
+                    >
+                      {linkSelectionIds.indexOf(bubble.id) + 1}
+                    </text>
+                  ) : null}
 
                   <circle
                     cx={-width / 2 + 18}
@@ -1204,6 +1324,63 @@ export default function ViewerPage() {
                 {activeLodLinks.length} lien(s)
               </em>
             </div>
+          </div>
+
+          <div className="panelBlock">
+            <p className="panelLabel">Créer / casser un lien</p>
+
+            <div className="linkSelectionBox">
+              <div>
+                <span>Bulle 1</span>
+                <strong>{selectedLinkBubbles[0]?.label ?? "Non sélectionnée"}</strong>
+                <small>{selectedLinkBubbles[0]?.subtitle ?? "Clique une bulle"}</small>
+              </div>
+
+              <div>
+                <span>Bulle 2</span>
+                <strong>{selectedLinkBubbles[1]?.label ?? "Non sélectionnée"}</strong>
+                <small>{selectedLinkBubbles[1]?.subtitle ?? "Clique une deuxième bulle"}</small>
+              </div>
+            </div>
+
+            <div className="linkCreator">
+              <input
+                value={linkLabel}
+                onChange={(event) => setLinkLabel(event.target.value)}
+                placeholder="Nom du lien..."
+              />
+
+              <input
+                type="color"
+                value={linkColor}
+                onChange={(event) => setLinkColor(event.target.value)}
+                title="Couleur du lien"
+              />
+
+              <button
+                onClick={createLinkBetweenSelectedBubbles}
+                disabled={selectedLinkBubbles.length !== 2}
+              >
+                Créer lien
+              </button>
+
+              <button
+                className="dangerButton"
+                onClick={breakLinkBetweenSelectedBubbles}
+                disabled={selectedLinkBubbles.length !== 2}
+              >
+                Casser lien
+              </button>
+
+              <button onClick={clearLinkSelection}>Vider sélection</button>
+            </div>
+
+            <p className="hint">
+              Liens existants entre les deux bulles sélectionnées :{" "}
+              <strong>{selectedPairExistingLinks.length}</strong>. Le bouton
+              “Casser lien” supprime tous les liens entre ces deux bulles, dans
+              les deux sens.
+            </p>
           </div>
 
           <div className="panelBlock">
@@ -1259,61 +1436,6 @@ export default function ViewerPage() {
             ) : (
               <p className="empty">Aucune bulle sélectionnée.</p>
             )}
-          </div>
-
-          <div className="panelBlock">
-            <p className="panelLabel">Créer un lien dans {activeLod}</p>
-
-            {selectedBubble ? (
-              <div className="linkCreator">
-                <div className="linkSource">
-                  <span>Source</span>
-                  <strong>{selectedBubble.label}</strong>
-                  <small>{selectedBubble.subtitle}</small>
-                </div>
-
-                <select
-                  value={linkTargetId}
-                  onChange={(event) => setLinkTargetId(event.target.value)}
-                >
-                  {linkTargetOptions.length === 0 ? (
-                    <option value="">Aucune cible disponible</option>
-                  ) : (
-                    linkTargetOptions.map((bubble) => (
-                      <option key={bubble.id} value={bubble.id}>
-                        {bubble.label} · {bubble.subtitle}
-                      </option>
-                    ))
-                  )}
-                </select>
-
-                <input
-                  value={linkLabel}
-                  onChange={(event) => setLinkLabel(event.target.value)}
-                  placeholder="Nom du lien..."
-                />
-
-                <input
-                  type="color"
-                  value={linkColor}
-                  onChange={(event) => setLinkColor(event.target.value)}
-                  title="Couleur du lien"
-                />
-
-                <button onClick={createLinkFromSelectedBubble}>
-                  Créer le lien
-                </button>
-              </div>
-            ) : (
-              <p className="empty">
-                Sélectionne une bulle pour créer un lien sortant.
-              </p>
-            )}
-
-            <p className="hint">
-              Le lien part de la bulle sélectionnée vers la cible choisie. Il
-              reste attaché aux bulles quand tu les déplaces.
-            </p>
           </div>
 
           <div className="panelBlock">
@@ -1500,23 +1622,23 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.7</p>
+            <p className="panelLabel">Lecture V0.8</p>
 
             <ul className="readingList">
               <li>
-                <strong>Onglets</strong> : LOD1, LOD2 et LOD3 séparés.
+                <strong>Mode lien</strong> : clique sur deux bulles pour les sélectionner.
               </li>
               <li>
-                <strong>Bulles</strong> : métiers, sous-métiers, outils et texte libre.
+                <strong>Créer lien</strong> : crée un lien de la bulle 1 vers la bulle 2.
               </li>
               <li>
-                <strong>Liens</strong> : création de relations entre deux bulles du même LOD.
+                <strong>Casser lien</strong> : supprime tous les liens entre les deux bulles sélectionnées.
               </li>
               <li>
-                <strong>Déplacement</strong> : les liens suivent automatiquement les bulles déplacées.
+                <strong>Contour cyan</strong> : bulles sélectionnées pour le lien.
               </li>
               <li>
-                <strong>Affichage</strong> : un lien s’affiche seulement si ses deux bulles sont visibles.
+                <strong>Déplacement</strong> : désactive le mode lien pour déplacer les bulles.
               </li>
             </ul>
           </div>
@@ -1585,7 +1707,6 @@ export default function ViewerPage() {
         .libraryActions button,
         .miniDeleteButton,
         .linkCreator input,
-        .linkCreator select,
         .linkCreator button {
           border: 1px solid rgba(148, 163, 184, 0.28);
           background: rgba(15, 23, 42, 0.84);
@@ -1620,10 +1741,22 @@ export default function ViewerPage() {
           background: rgba(37, 99, 235, 0.34);
         }
 
+        .toolbar button:disabled,
+        .linkCreator button:disabled {
+          cursor: not-allowed;
+          opacity: 0.45;
+        }
+
         .toolbar .activeButton {
           background: rgba(250, 204, 21, 0.28);
           border-color: rgba(250, 204, 21, 0.55);
           color: #fef9c3;
+        }
+
+        .linkModeButtonActive {
+          background: rgba(34, 211, 238, 0.26) !important;
+          border-color: rgba(34, 211, 238, 0.58) !important;
+          color: #cffafe !important;
         }
 
         .dangerButton,
@@ -1631,6 +1764,17 @@ export default function ViewerPage() {
         .libraryActions .dangerButton {
           background: rgba(220, 38, 38, 0.32);
           border-color: rgba(248, 113, 113, 0.42);
+        }
+
+        .linkModeBanner {
+          border: 1px solid rgba(34, 211, 238, 0.38);
+          background: rgba(8, 47, 73, 0.5);
+          color: #cffafe;
+          border-radius: 16px;
+          padding: 11px 14px;
+          font-size: 13px;
+          font-weight: 800;
+          margin-bottom: 14px;
         }
 
         .lodTabs {
@@ -1707,6 +1851,10 @@ export default function ViewerPage() {
           cursor: grab;
         }
 
+        .graphSvgLinkMode {
+          cursor: crosshair;
+        }
+
         .activeLodBand {
           fill: rgba(15, 23, 42, 0.16);
           stroke: rgba(148, 163, 184, 0.08);
@@ -1768,12 +1916,23 @@ export default function ViewerPage() {
           cursor: grabbing;
         }
 
+        .bubbleGroupLinkMode {
+          cursor: crosshair;
+        }
+
         .bubbleText {
           fill: #020617;
           font-size: 12px;
           font-weight: 900;
           pointer-events: none;
           letter-spacing: -0.01em;
+        }
+
+        .linkOrderText {
+          fill: #020617;
+          font-size: 10px;
+          font-weight: 950;
+          pointer-events: none;
         }
 
         .sidePanel {
@@ -1928,37 +2087,45 @@ export default function ViewerPage() {
           grid-template-columns: 1fr 1.3fr 64px auto;
         }
 
-        .linkCreator {
+        .linkSelectionBox {
           display: grid;
-          grid-template-columns: 1fr;
+          grid-template-columns: 1fr 1fr;
           gap: 8px;
+          margin-bottom: 10px;
         }
 
-        .linkSource {
-          border: 1px solid rgba(148, 163, 184, 0.18);
-          background: rgba(2, 6, 23, 0.42);
+        .linkSelectionBox div {
+          border: 1px solid rgba(34, 211, 238, 0.22);
+          background: rgba(8, 47, 73, 0.25);
           border-radius: 14px;
           padding: 10px;
           display: grid;
           gap: 3px;
         }
 
-        .linkSource span {
-          color: #94a3b8;
+        .linkSelectionBox span {
+          color: #67e8f9;
           font-size: 11px;
-          font-weight: 800;
+          font-weight: 850;
           text-transform: uppercase;
           letter-spacing: 0.08em;
         }
 
-        .linkSource strong {
+        .linkSelectionBox strong {
           color: #f8fafc;
           font-size: 14px;
         }
 
-        .linkSource small {
+        .linkSelectionBox small {
           color: #94a3b8;
           font-size: 12px;
+        }
+
+        .linkCreator {
+          display: grid;
+          grid-template-columns: 1fr 58px 1fr 1fr 1fr;
+          gap: 8px;
+          align-items: center;
         }
 
         .linkList {
@@ -2010,6 +2177,10 @@ export default function ViewerPage() {
           margin: 10px 0 0 0;
           font-size: 12.5px;
           line-height: 1.45;
+        }
+
+        .hint strong {
+          color: #e5e7eb;
         }
 
         .bubbleList {
@@ -2127,7 +2298,9 @@ export default function ViewerPage() {
           }
 
           .addBubbleGrid,
-          .addBubbleGridFree {
+          .addBubbleGridFree,
+          .linkCreator,
+          .linkSelectionBox {
             grid-template-columns: 1fr;
           }
 
