@@ -40,7 +40,7 @@ type Bubble = {
   subtitle: string;
   family: BubbleFamily;
   pillar?: Pillar;
-  lod?: LOD;
+  lod: LOD;
   x: number;
   y: number;
   color: string;
@@ -59,8 +59,8 @@ type BubbleOverride = {
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_overrides_v1";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_v1";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_overrides_v1";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_v1";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -158,15 +158,9 @@ const PILLAR_FRAMES: Record<
   Pillar,
   { x: number; y: number; w: number; h: number }
 > = {
-  PIECE: { x: 170, y: 145, w: 400, h: 755 },
-  HP: { x: 600, y: 145, w: 400, h: 755 },
-  GPE: { x: 1030, y: 145, w: 400, h: 755 },
-};
-
-const LOD_ROWS: Record<LOD, { y: number; h: number }> = {
-  LOD1: { y: 185, h: 205 },
-  LOD2: { y: 430, h: 205 },
-  LOD3: { y: 675, h: 205 },
+  PIECE: { x: 170, y: 185, w: 400, h: 690 },
+  HP: { x: 600, y: 185, w: 400, h: 690 },
+  GPE: { x: 1030, y: 185, w: 400, h: 690 },
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -184,24 +178,24 @@ function colorForFamilyValue(family: BubbleFamily, value: string) {
   return FAMILY_COLORS[family];
 }
 
-function subtitleForFamilyValue(family: BubbleFamily) {
-  if (family === "METIER") return "Métier";
-  if (family === "OUTIL") return "Outil";
-  return "Métier simulation";
+function subtitleForFamilyValue(family: BubbleFamily, lod: LOD) {
+  if (family === "METIER") return `${lod} · Métier`;
+  if (family === "OUTIL") return `${lod} · Outil`;
+  return `${lod} · Métier simulation`;
 }
 
-function descriptionForFamilyValue(family: BubbleFamily, value: string) {
+function descriptionForFamilyValue(family: BubbleFamily, value: string, lod: LOD) {
   const label = labelForFamilyValue(family, value);
 
   if (family === "METIER") {
-    return `Bulle métier libre : ${label}. Elle peut être placée manuellement dans le cadre Pièce, HP ou GPE, au niveau LOD souhaité.`;
+    return `Bulle métier libre : ${label}. Elle appartient à l’onglet ${lod} et peut être placée manuellement dans le cadre Pièce, HP ou GPE.`;
   }
 
   if (family === "OUTIL") {
-    return `Bulle outil libre : ${label}. Elle peut être placée dans la zone où l’outil intervient dans ton architecture.`;
+    return `Bulle outil libre : ${label}. Elle appartient à l’onglet ${lod} et peut être placée dans la zone où l’outil intervient dans ton architecture.`;
   }
 
-  return `Bulle métier simulation libre : ${label}. Elle peut être positionnée dans la zone simulation ou dans tout autre emplacement utile.`;
+  return `Bulle métier simulation libre : ${label}. Elle appartient à l’onglet ${lod} et peut être positionnée dans la zone simulation ou dans tout autre emplacement utile.`;
 }
 
 function getOptionsForFamily(family: BubbleFamily) {
@@ -229,74 +223,73 @@ function bubbleWidth(label: string) {
   return clamp(label.length * 8 + 42, 70, 172);
 }
 
-function getInitialBubblePosition(index: number): Position {
+function getToolInitialBubblePosition(index: number): Position {
   const col = index % 5;
   const row = Math.floor(index / 5);
 
   return {
-    x: 1180 + col * 68,
-    y: 205 + row * 46,
+    x: 1130 + col * 72,
+    y: 260 + row * 48,
   };
 }
 
 function buildDefaultBubbles(): Bubble[] {
   const bubbles: Bubble[] = [];
 
-  for (const pillar of PILLARS) {
-    const frame = PILLAR_FRAMES[pillar];
-
-    for (const lod of LODS) {
-      const row = LOD_ROWS[lod];
+  for (const lod of LODS) {
+    for (const pillar of PILLARS) {
+      const frame = PILLAR_FRAMES[pillar];
 
       ENTITIES.forEach((entity, index) => {
         bubbles.push({
-          id: `${pillar}_${lod}_${entity}`,
+          id: `${lod}_${pillar}_${entity}`,
           label: entity,
-          subtitle: `${PILLAR_LABELS[pillar]} · ${lod}`,
+          subtitle: `${LOD_LABELS[lod]} · ${PILLAR_LABELS[pillar]}`,
           family: "METIER",
           pillar,
           lod,
           x: frame.x + 65 + index * 68,
-          y: row.y + 72,
+          y: frame.y + 95,
           color: ENTITY_COLORS[entity],
-          description: `${entity} associé par défaut au pilier ${PILLAR_LABELS[pillar]} et au niveau ${lod}. Cette bulle reste librement déplaçable.`,
+          description: `${entity} associé par défaut au pilier ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}. Cette bulle reste librement déplaçable.`,
           visibleDefault: true,
         });
       });
 
       SIMULATION_JOBS.forEach((job, index) => {
         bubbles.push({
-          id: `${pillar}_${lod}_SIM_${job}`,
+          id: `${lod}_${pillar}_SIM_${job}`,
           label: SIMULATION_JOB_LABELS[job],
-          subtitle: `${PILLAR_LABELS[pillar]} · ${lod}`,
+          subtitle: `${LOD_LABELS[lod]} · ${PILLAR_LABELS[pillar]}`,
           family: "SIMULATION",
           pillar,
           lod,
           x: frame.x + 82 + index * 78,
-          y: row.y + 132,
+          y: frame.y + 158,
           color: FAMILY_COLORS.SIMULATION,
-          description: `Métier simulation ${SIMULATION_JOB_LABELS[job]} disponible pour ${PILLAR_LABELS[pillar]} au niveau ${lod}.`,
+          description: `Métier simulation ${SIMULATION_JOB_LABELS[job]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
         });
       });
     }
-  }
 
-  TOOLS.forEach((tool, index) => {
-    const position = getInitialBubblePosition(index);
+    TOOLS.forEach((tool, index) => {
+      const position = getToolInitialBubblePosition(index);
 
-    bubbles.push({
-      id: `TOOL_${tool}`,
-      label: TOOL_LABELS[tool],
-      subtitle: "Outil libre",
-      family: "OUTIL",
-      x: position.x,
-      y: position.y,
-      color: FAMILY_COLORS.OUTIL,
-      description: `Outil ${TOOL_LABELS[tool]} disponible comme bulle libre. Tu peux l’afficher, le déplacer et le placer dans la zone souhaitée.`,
-      visibleDefault: false,
+      bubbles.push({
+        id: `${lod}_TOOL_${tool}`,
+        label: TOOL_LABELS[tool],
+        subtitle: `${LOD_LABELS[lod]} · Outil libre`,
+        family: "OUTIL",
+        lod,
+        x: position.x,
+        y: position.y,
+        color: FAMILY_COLORS.OUTIL,
+        description: `Outil ${TOOL_LABELS[tool]} disponible comme bulle libre dans l’onglet ${lod}. Tu peux l’afficher, le déplacer et le placer dans la zone souhaitée.`,
+        visibleDefault: false,
+      });
     });
-  });
+  }
 
   return bubbles;
 }
@@ -309,20 +302,21 @@ export default function ViewerPage() {
 
   const defaultBubbles = useMemo(() => buildDefaultBubbles(), []);
 
+  const [activeLod, setActiveLod] = useState<LOD>("LOD1");
+
   const [customBubbles, setCustomBubbles] = useState<Bubble[]>([]);
   const [bubbleOverrides, setBubbleOverrides] = useState<
     Record<string, BubbleOverride>
   >({});
 
   const [selectedBubbleId, setSelectedBubbleId] = useState<string>(
-    "PIECE_LOD1_BE"
+    "LOD1_PIECE_BE"
   );
 
   const [moveEnabled, setMoveEnabled] = useState(true);
   const [search, setSearch] = useState("");
   const [familyFilter, setFamilyFilter] = useState<BubbleFamily | "ALL">("ALL");
   const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
-  const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
 
   const [newBubbleFamily, setNewBubbleFamily] =
     useState<BubbleFamily>("METIER");
@@ -376,6 +370,24 @@ export default function ViewerPage() {
     }
   }, [newBubbleFamily]);
 
+  function changeActiveLod(nextLod: LOD) {
+    setActiveLod(nextLod);
+
+    const firstVisibleBubbleForLod = bubbles.find(
+      (bubble) => bubble.lod === nextLod && !bubble.deleted && bubble.visible
+    );
+
+    const firstAvailableBubbleForLod = bubbles.find(
+      (bubble) => bubble.lod === nextLod && !bubble.deleted
+    );
+
+    setSelectedBubbleId(
+      firstVisibleBubbleForLod?.id ??
+        firstAvailableBubbleForLod?.id ??
+        `${nextLod}_PIECE_BE`
+    );
+  }
+
   const allBaseBubbles = useMemo(() => {
     return [...defaultBubbles, ...customBubbles];
   }, [defaultBubbles, customBubbles]);
@@ -394,6 +406,10 @@ export default function ViewerPage() {
     });
   }, [allBaseBubbles, bubbleOverrides]);
 
+  const activeLodBubbles = useMemo(() => {
+    return bubbles.filter((bubble) => bubble.lod === activeLod && !bubble.deleted);
+  }, [bubbles, activeLod]);
+
   const selectedBubble = useMemo(() => {
     return bubbles.find(
       (bubble) => bubble.id === selectedBubbleId && !bubble.deleted
@@ -403,9 +419,7 @@ export default function ViewerPage() {
   const filteredBubbles = useMemo(() => {
     const searchValue = search.toLowerCase().trim();
 
-    return bubbles.filter((bubble) => {
-      if (bubble.deleted) return false;
-
+    return activeLodBubbles.filter((bubble) => {
       const matchSearch =
         searchValue.length === 0 ||
         bubble.label.toLowerCase().includes(searchValue) ||
@@ -419,11 +433,9 @@ export default function ViewerPage() {
       const matchPillar =
         pillarFilter === "ALL" || bubble.pillar === pillarFilter || !bubble.pillar;
 
-      const matchLOD = lodFilter === "ALL" || bubble.lod === lodFilter || !bubble.lod;
-
-      return matchSearch && matchFamily && matchPillar && matchLOD;
+      return matchSearch && matchFamily && matchPillar;
     });
-  }, [bubbles, search, familyFilter, pillarFilter, lodFilter]);
+  }, [activeLodBubbles, search, familyFilter, pillarFilter]);
 
   const visibleBubbles = useMemo(() => {
     return filteredBubbles.filter((bubble) => bubble.visible);
@@ -526,19 +538,26 @@ export default function ViewerPage() {
   function addCustomBubble() {
     const label = labelForFamilyValue(newBubbleFamily, newBubbleValue);
     const color = colorForFamilyValue(newBubbleFamily, newBubbleValue);
-    const index = customBubbles.length;
+    const index = customBubbles.filter((bubble) => bubble.lod === activeLod).length;
 
-    const id = `CUSTOM_${Date.now()}_${Math.round(Math.random() * 100000)}`;
+    const id = `CUSTOM_${activeLod}_${Date.now()}_${Math.round(
+      Math.random() * 100000
+    )}`;
 
     const bubble: Bubble = {
       id,
       label,
-      subtitle: subtitleForFamilyValue(newBubbleFamily),
+      subtitle: subtitleForFamilyValue(newBubbleFamily, activeLod),
       family: newBubbleFamily,
+      lod: activeLod,
       x: 1460,
-      y: 190 + (index % 12) * 48,
+      y: 205 + (index % 12) * 48,
       color,
-      description: descriptionForFamilyValue(newBubbleFamily, newBubbleValue),
+      description: descriptionForFamilyValue(
+        newBubbleFamily,
+        newBubbleValue,
+        activeLod
+      ),
       visibleDefault: true,
       isCustom: true,
     };
@@ -609,11 +628,23 @@ export default function ViewerPage() {
     }
   }
 
-  function resetPositions() {
+  function resetPositionsForActiveLod() {
     setBubbleOverrides((previous) => {
       const next: Record<string, BubbleOverride> = {};
 
       for (const [bubbleId, override] of Object.entries(previous)) {
+        const bubble = bubbles.find((item) => item.id === bubbleId);
+
+        if (!bubble) {
+          next[bubbleId] = override;
+          continue;
+        }
+
+        if (bubble.lod !== activeLod) {
+          next[bubbleId] = override;
+          continue;
+        }
+
         if (override.visible !== undefined || override.deleted !== undefined) {
           next[bubbleId] = {
             visible: override.visible,
@@ -632,8 +663,8 @@ export default function ViewerPage() {
     setSearch("");
     setFamilyFilter("ALL");
     setPillarFilter("ALL");
-    setLodFilter("ALL");
-    setSelectedBubbleId("PIECE_LOD1_BE");
+    setActiveLod("LOD1");
+    setSelectedBubbleId("LOD1_PIECE_BE");
 
     window.localStorage.removeItem(LS_BUBBLE_OVERRIDES);
     window.localStorage.removeItem(LS_CUSTOM_BUBBLES);
@@ -641,12 +672,15 @@ export default function ViewerPage() {
 
   const newBubbleOptions = getOptionsForFamily(newBubbleFamily);
 
+  const activeLodVisibleCount = activeLodBubbles.filter((bubble) => bubble.visible).length;
+  const activeLodTotalCount = activeLodBubbles.length;
+
   return (
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.3</p>
-          <h1>Placement libre des bulles dans Pièce / HP / GPE</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.4</p>
+          <h1>Placement libre par onglet LOD dans Pièce / HP / GPE</h1>
         </div>
 
         <div className="toolbar">
@@ -680,16 +714,6 @@ export default function ViewerPage() {
             <option value="GPE">GPE</option>
           </select>
 
-          <select
-            value={lodFilter}
-            onChange={(event) => setLodFilter(event.target.value as LOD | "ALL")}
-          >
-            <option value="ALL">Tous LOD</option>
-            <option value="LOD1">LOD1</option>
-            <option value="LOD2">LOD2</option>
-            <option value="LOD3">LOD3</option>
-          </select>
-
           <button
             className={moveEnabled ? "activeButton" : ""}
             onClick={() => setMoveEnabled((current) => !current)}
@@ -699,9 +723,32 @@ export default function ViewerPage() {
 
           <button onClick={showFilteredBubbles}>Afficher sélection</button>
           <button onClick={hideFilteredBubbles}>Masquer sélection</button>
-          <button onClick={resetPositions}>Réinit. positions</button>
+          <button onClick={resetPositionsForActiveLod}>Réinit. positions LOD</button>
           <button onClick={resetEverything}>Réinit. total</button>
         </div>
+      </section>
+
+      <section className="lodTabs">
+        {LODS.map((lod) => {
+          const lodBubbles = bubbles.filter(
+            (bubble) => bubble.lod === lod && !bubble.deleted
+          );
+          const visibleCount = lodBubbles.filter((bubble) => bubble.visible).length;
+
+          return (
+            <button
+              key={lod}
+              className={activeLod === lod ? "lodTab lodTabActive" : "lodTab"}
+              onClick={() => changeActiveLod(lod)}
+            >
+              <strong>{LOD_LABELS[lod]}</strong>
+              <span>{LOD_DETAILS[lod]}</span>
+              <em>
+                {visibleCount}/{lodBubbles.length} visibles
+              </em>
+            </button>
+          );
+        })}
       </section>
 
       <section className="layout">
@@ -731,6 +778,23 @@ export default function ViewerPage() {
               </filter>
             </defs>
 
+            <rect
+              x={120}
+              y={145}
+              width={1350}
+              height={755}
+              rx={28}
+              className="activeLodBand"
+            />
+
+            <text x={55} y={478} className="lodMainLabel">
+              {LOD_LABELS[activeLod]}
+            </text>
+
+            <text x={55} y={506} className="lodSubLabel">
+              {LOD_DETAILS[activeLod]}
+            </text>
+
             {PILLARS.map((pillar) => {
               const frame = PILLAR_FRAMES[pillar];
 
@@ -753,39 +817,6 @@ export default function ViewerPage() {
                     className="pillarTitle"
                   >
                     {PILLAR_LABELS[pillar]}
-                  </text>
-                </g>
-              );
-            })}
-
-            {LODS.map((lod) => {
-              const row = LOD_ROWS[lod];
-
-              return (
-                <g key={lod}>
-                  <rect
-                    x={120}
-                    y={row.y}
-                    width={1350}
-                    height={row.h}
-                    rx={22}
-                    className="lodBand"
-                  />
-
-                  <line
-                    x1={145}
-                    y1={row.y}
-                    x2={1450}
-                    y2={row.y}
-                    className="lodSeparator"
-                  />
-
-                  <text x={55} y={row.y + 92} className="lodMainLabel">
-                    {LOD_LABELS[lod]}
-                  </text>
-
-                  <text x={55} y={row.y + 118} className="lodSubLabel">
-                    {LOD_DETAILS[lod]}
                   </text>
                 </g>
               );
@@ -843,6 +874,18 @@ export default function ViewerPage() {
 
         <aside className="sidePanel">
           <div className="panelBlock">
+            <p className="panelLabel">Onglet actif</p>
+
+            <div className="lodStatusCard">
+              <strong>{LOD_LABELS[activeLod]}</strong>
+              <span>{LOD_DETAILS[activeLod]}</span>
+              <em>
+                {activeLodVisibleCount}/{activeLodTotalCount} bulles visibles
+              </em>
+            </div>
+          </div>
+
+          <div className="panelBlock">
             <p className="panelLabel">Bulle sélectionnée</p>
 
             {selectedBubble ? (
@@ -898,7 +941,7 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Ajouter une bulle libre</p>
+            <p className="panelLabel">Ajouter une bulle libre dans {activeLod}</p>
 
             <div className="addBubbleGrid">
               <select
@@ -927,15 +970,15 @@ export default function ViewerPage() {
             </div>
 
             <p className="hint">
-              Les bulles ajoutées sont indépendantes. Tu peux ajouter plusieurs
-              fois CATIA, BE, ANSA, Inj_c, etc.
+              La bulle ajoutée est créée uniquement dans l’onglet {activeLod}.
+              Chaque LOD possède sa propre bibliothèque et ses propres positions.
             </p>
           </div>
 
           <div className="panelBlock">
             <div className="libraryHeader">
               <div>
-                <p className="panelLabel">Bibliothèque des bulles</p>
+                <p className="panelLabel">Bibliothèque des bulles · {activeLod}</p>
                 <p className="libraryCount">
                   {filteredBubbles.length} bulle(s) dans la sélection
                 </p>
@@ -1004,26 +1047,23 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.3</p>
+            <p className="panelLabel">Lecture V0.4</p>
 
             <ul className="readingList">
               <li>
-                <strong>Cadres fixes</strong> : Pièce, HP et GPE.
+                <strong>Onglets</strong> : LOD1, LOD2 et LOD3 séparés.
               </li>
               <li>
-                <strong>Repères fixes</strong> : LOD1, LOD2, LOD3 sur la gauche.
+                <strong>Cadres fixes</strong> : Pièce, HP et GPE conservés dans chaque onglet.
               </li>
               <li>
-                <strong>Bulles libres</strong> : métiers, outils et métiers simulation.
+                <strong>Bibliothèque</strong> : bulles filtrées par onglet LOD actif.
               </li>
               <li>
-                <strong>Cocher / décocher</strong> : chaque bulle peut être affichée ou masquée.
+                <strong>Placement</strong> : positions sauvegardées séparément pour chaque LOD.
               </li>
               <li>
-                <strong>Supprimer</strong> : une bulle supprimée disparaît de la bibliothèque.
-              </li>
-              <li>
-                <strong>Réinit. total</strong> : restaure toutes les bulles par défaut.
+                <strong>Affichage</strong> : cocher, décocher ou supprimer les bulles dans l’onglet actif.
               </li>
             </ul>
           </div>
@@ -1054,7 +1094,7 @@ export default function ViewerPage() {
           justify-content: space-between;
           gap: 18px;
           align-items: flex-start;
-          margin-bottom: 18px;
+          margin-bottom: 16px;
         }
 
         .eyebrow {
@@ -1126,6 +1166,48 @@ export default function ViewerPage() {
           border-color: rgba(248, 113, 113, 0.42);
         }
 
+        .lodTabs {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 10px;
+          margin-bottom: 16px;
+        }
+
+        .lodTab {
+          border: 1px solid rgba(148, 163, 184, 0.22);
+          background: rgba(15, 23, 42, 0.74);
+          color: #e5e7eb;
+          border-radius: 18px;
+          padding: 13px 15px;
+          text-align: left;
+          cursor: pointer;
+          display: grid;
+          gap: 3px;
+        }
+
+        .lodTab strong {
+          font-size: 17px;
+          color: #f8fafc;
+        }
+
+        .lodTab span {
+          color: #94a3b8;
+          font-size: 13px;
+        }
+
+        .lodTab em {
+          color: #cbd5e1;
+          font-size: 12px;
+          font-style: normal;
+          margin-top: 2px;
+        }
+
+        .lodTabActive {
+          border-color: rgba(56, 189, 248, 0.58);
+          background: rgba(14, 165, 233, 0.18);
+          box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.16) inset;
+        }
+
         .layout {
           display: grid;
           grid-template-columns: minmax(0, 1fr) 430px;
@@ -1158,6 +1240,12 @@ export default function ViewerPage() {
           cursor: grab;
         }
 
+        .activeLodBand {
+          fill: rgba(15, 23, 42, 0.16);
+          stroke: rgba(148, 163, 184, 0.08);
+          stroke-width: 1;
+        }
+
         .pillarFrame {
           fill: rgba(15, 23, 42, 0.22);
           stroke-width: 1.8;
@@ -1170,18 +1258,6 @@ export default function ViewerPage() {
           font-size: 21px;
           font-weight: 900;
           letter-spacing: 0.05em;
-        }
-
-        .lodBand {
-          fill: rgba(15, 23, 42, 0.16);
-          stroke: rgba(148, 163, 184, 0.08);
-          stroke-width: 1;
-        }
-
-        .lodSeparator {
-          stroke: rgba(226, 232, 240, 0.1);
-          stroke-width: 1.2;
-          stroke-dasharray: 8 10;
         }
 
         .lodMainLabel {
@@ -1238,6 +1314,27 @@ export default function ViewerPage() {
           color: #93c5fd;
           text-transform: uppercase;
           letter-spacing: 0.13em;
+        }
+
+        .lodStatusCard {
+          display: grid;
+          gap: 3px;
+          border: 1px solid rgba(56, 189, 248, 0.22);
+          background: rgba(14, 165, 233, 0.12);
+          border-radius: 16px;
+          padding: 12px;
+        }
+
+        .lodStatusCard strong {
+          font-size: 18px;
+          color: #f8fafc;
+        }
+
+        .lodStatusCard span,
+        .lodStatusCard em {
+          color: #cbd5e1;
+          font-size: 13px;
+          font-style: normal;
         }
 
         .libraryHeader {
@@ -1475,6 +1572,10 @@ export default function ViewerPage() {
 
           .libraryActions {
             justify-content: flex-start;
+          }
+
+          .lodTabs {
+            grid-template-columns: 1fr;
           }
         }
       `}</style>
