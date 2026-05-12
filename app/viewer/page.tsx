@@ -6,6 +6,23 @@ type Pillar = "PIECE" | "HP" | "GPE";
 type LOD = "LOD1" | "LOD2" | "LOD3";
 type Entity = "BE" | "BM" | "SIM" | "FA" | "CND" | "TRANSVERSE";
 
+type ToolName =
+  | "3DEXPERIENCE"
+  | "CATIA"
+  | "EKL"
+  | "ABAQUS"
+  | "ANSA"
+  | "Python"
+  | "Moldflow"
+  | "ProCAST"
+  | "Flow-3D"
+  | "Visual Mesh"
+  | "Excel"
+  | "Power BI"
+  | "MES"
+  | "ERP"
+  | "CIVA";
+
 type NodeCategory =
   | "process"
   | "pillar_hub"
@@ -53,6 +70,7 @@ type GraphNode = {
   status: NodeStatus;
   description: string;
   functions: FunctionItem[];
+  tools?: ToolName[];
 };
 
 type GraphEdge = {
@@ -71,6 +89,42 @@ const HEIGHT = 980;
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
 const ENTITIES = ["BE", "BM", "SIM", "FA", "CND"] as const;
+
+const TOOLS: ToolName[] = [
+  "3DEXPERIENCE",
+  "CATIA",
+  "EKL",
+  "ABAQUS",
+  "ANSA",
+  "Python",
+  "Moldflow",
+  "ProCAST",
+  "Flow-3D",
+  "Visual Mesh",
+  "Excel",
+  "Power BI",
+  "MES",
+  "ERP",
+  "CIVA",
+];
+
+const TOOL_LABELS: Record<ToolName, string> = {
+  "3DEXPERIENCE": "3DEXPERIENCE",
+  CATIA: "CATIA",
+  EKL: "EKL",
+  ABAQUS: "ABAQUS",
+  ANSA: "ANSA",
+  Python: "Python",
+  Moldflow: "Moldflow",
+  ProCAST: "ProCAST",
+  "Flow-3D": "Flow-3D",
+  "Visual Mesh": "Visual Mesh",
+  Excel: "Excel",
+  "Power BI": "Power BI",
+  MES: "MES / Atelier",
+  ERP: "ERP",
+  CIVA: "CIVA / CND",
+};
 
 const PILLAR_LABELS: Record<Pillar, string> = {
   PIECE: "Pièce",
@@ -143,7 +197,10 @@ const LOD_Y: Record<LOD, number> = {
   LOD3: 810,
 };
 
-const ENTITY_OFFSETS: Record<Exclude<Entity, "TRANSVERSE">, { dx: number; dy: number }> = {
+const ENTITY_OFFSETS: Record<
+  Exclude<Entity, "TRANSVERSE">,
+  { dx: number; dy: number }
+> = {
   BE: { dx: -128, dy: -58 },
   BM: { dx: 0, dy: -84 },
   SIM: { dx: 128, dy: -58 },
@@ -169,7 +226,11 @@ function wrapLabel(label: string, maxLength = 15) {
   return lines.slice(0, 4);
 }
 
-function getNodeId(pillar: Pillar, lod: LOD, entity?: Exclude<Entity, "TRANSVERSE">) {
+function getNodeId(
+  pillar: Pillar,
+  lod: LOD,
+  entity?: Exclude<Entity, "TRANSVERSE">
+) {
   if (!entity) return `${pillar}_${lod}_HUB`;
   return `${pillar}_${lod}_${entity}`;
 }
@@ -186,98 +247,330 @@ function statusByLOD(lod: LOD): NodeStatus {
   return "non_demarre";
 }
 
-function functionsFor(entity: Exclude<Entity, "TRANSVERSE">, pillar: Pillar, lod: LOD): FunctionItem[] {
+function functionsFor(
+  entity: Exclude<Entity, "TRANSVERSE">,
+  pillar: Pillar,
+  lod: LOD
+): FunctionItem[] {
   const pillarLabel = PILLAR_LABELS[pillar];
 
-  const base: Record<Exclude<Entity, "TRANSVERSE">, Record<LOD, FunctionItem[]>> = {
+  const base: Record<
+    Exclude<Entity, "TRANSVERSE">,
+    Record<LOD, FunctionItem[]>
+  > = {
     BE: {
       LOD1: [
-        { title: "Définir l’intention produit", detail: `Fonction attendue sur le pilier ${pillarLabel}.` },
-        { title: "Identifier les interfaces", detail: "Interfaces fonctionnelles, géométriques et système." },
-        { title: "Porter les exigences", detail: "Exigences principales, contraintes d’encombrement et hypothèses fortes." },
+        {
+          title: "Définir l’intention produit",
+          detail: `Fonction attendue sur le pilier ${pillarLabel}.`,
+        },
+        {
+          title: "Identifier les interfaces",
+          detail: "Interfaces fonctionnelles, géométriques et système.",
+        },
+        {
+          title: "Porter les exigences",
+          detail:
+            "Exigences principales, contraintes d’encombrement et hypothèses fortes.",
+        },
       ],
       LOD2: [
-        { title: "Construire la géométrie paramétrée", detail: "Variantes CAO, paramètres, règles de conception." },
-        { title: "Préparer la convergence", detail: "Tolérances provisoires, interfaces détaillées, compromis métier." },
-        { title: "Intégrer les retours métiers", detail: "Retours BM, SIM, FA et CND dans la définition intermédiaire." },
+        {
+          title: "Construire la géométrie paramétrée",
+          detail: "Variantes CAO, paramètres, règles de conception.",
+        },
+        {
+          title: "Préparer la convergence",
+          detail:
+            "Tolérances provisoires, interfaces détaillées, compromis métier.",
+        },
+        {
+          title: "Intégrer les retours métiers",
+          detail:
+            "Retours BM, SIM, FA et CND dans la définition intermédiaire.",
+        },
       ],
       LOD3: [
-        { title: "Libérer la définition", detail: "CAO détaillée, plans, tolérances et interfaces figées." },
-        { title: "Tracer la maturité", detail: "Lien entre définition finale, preuves et décisions." },
-        { title: "Supporter le dossier final", detail: "Données exploitables par méthodes, fabrication et contrôle." },
+        {
+          title: "Libérer la définition",
+          detail: "CAO détaillée, plans, tolérances et interfaces figées.",
+        },
+        {
+          title: "Tracer la maturité",
+          detail: "Lien entre définition finale, preuves et décisions.",
+        },
+        {
+          title: "Supporter le dossier final",
+          detail:
+            "Données exploitables par méthodes, fabrication et contrôle.",
+        },
       ],
     },
+
     BM: {
       LOD1: [
-        { title: "Définir le procédé pressenti", detail: `Première logique industrielle du pilier ${pillarLabel}.` },
-        { title: "Identifier les contraintes méthodes", detail: "Fabricabilité, outillage, chaîne process, hypothèses de gamme." },
-        { title: "Contribuer aux règles de conception", detail: "Contraintes process à intégrer très tôt par le BE." },
+        {
+          title: "Définir le procédé pressenti",
+          detail: `Première logique industrielle du pilier ${pillarLabel}.`,
+        },
+        {
+          title: "Identifier les contraintes méthodes",
+          detail:
+            "Fabricabilité, outillage, chaîne process, hypothèses de gamme.",
+        },
+        {
+          title: "Contribuer aux règles de conception",
+          detail: "Contraintes process à intégrer très tôt par le BE.",
+        },
       ],
       LOD2: [
-        { title: "Construire la gamme prévisionnelle", detail: "Séquences principales, paramètres process, outillages pressentis." },
-        { title: "Vérifier la fabricabilité", detail: "Analyse des formes, accès, reprises, bridage, risques process." },
-        { title: "Boucler avec BE et SIM", detail: "Retour sur géométrie et besoin de justification par simulation." },
+        {
+          title: "Construire la gamme prévisionnelle",
+          detail:
+            "Séquences principales, paramètres process, outillages pressentis.",
+        },
+        {
+          title: "Vérifier la fabricabilité",
+          detail:
+            "Analyse des formes, accès, reprises, bridage, risques process.",
+        },
+        {
+          title: "Boucler avec BE et SIM",
+          detail:
+            "Retour sur géométrie et besoin de justification par simulation.",
+        },
       ],
       LOD3: [
-        { title: "Figer la gamme détaillée", detail: "Fiches méthodes, paramètres process, outillages validés." },
-        { title: "Préparer l’exécution FA", detail: "Dossier transmissible atelier." },
-        { title: "Associer le plan de contrôle", detail: "Lien direct avec CND et qualité." },
+        {
+          title: "Figer la gamme détaillée",
+          detail:
+            "Fiches méthodes, paramètres process, outillages validés.",
+        },
+        {
+          title: "Préparer l’exécution FA",
+          detail: "Dossier transmissible atelier.",
+        },
+        {
+          title: "Associer le plan de contrôle",
+          detail: "Lien direct avec CND et qualité.",
+        },
       ],
     },
+
     SIM: {
       LOD1: [
-        { title: "Identifier les phénomènes physiques", detail: `Phénomènes à vérifier sur le pilier ${pillarLabel}.` },
-        { title: "Définir les critères calcul", detail: "Critères de performance, marges, zones critiques." },
-        { title: "Préparer la stratégie simulation", detail: "Niveau de modèle attendu selon la maturité LOD." },
+        {
+          title: "Identifier les phénomènes physiques",
+          detail: `Phénomènes à vérifier sur le pilier ${pillarLabel}.`,
+        },
+        {
+          title: "Définir les critères calcul",
+          detail: "Critères de performance, marges, zones critiques.",
+        },
+        {
+          title: "Préparer la stratégie simulation",
+          detail: "Niveau de modèle attendu selon la maturité LOD.",
+        },
       ],
       LOD2: [
-        { title: "Construire le modèle intermédiaire", detail: "Modèle simplifié ou semi-détaillé, hypothèses et maillage." },
-        { title: "Comparer les variantes", detail: "Analyse de sensibilité, paramètres influents, orientation de conception." },
-        { title: "Identifier les zones sensibles", detail: "Zones critiques à partager avec BE, BM et CND." },
+        {
+          title: "Construire le modèle intermédiaire",
+          detail:
+            "Modèle simplifié ou semi-détaillé, hypothèses et maillage.",
+        },
+        {
+          title: "Comparer les variantes",
+          detail:
+            "Analyse de sensibilité, paramètres influents, orientation de conception.",
+        },
+        {
+          title: "Identifier les zones sensibles",
+          detail: "Zones critiques à partager avec BE, BM et CND.",
+        },
       ],
       LOD3: [
-        { title: "Produire le rapport validé", detail: "Calculs finaux, marges, justification et traçabilité." },
-        { title: "Justifier la définition", detail: "Lien entre résultats, CAO libérée et décision RdC." },
-        { title: "Appuyer la preuve numérique", detail: "Élément de preuve exploitable dans la validation produit." },
+        {
+          title: "Produire le rapport validé",
+          detail: "Calculs finaux, marges, justification et traçabilité.",
+        },
+        {
+          title: "Justifier la définition",
+          detail: "Lien entre résultats, CAO libérée et décision RdC.",
+        },
+        {
+          title: "Appuyer la preuve numérique",
+          detail:
+            "Élément de preuve exploitable dans la validation produit.",
+        },
       ],
     },
+
     FA: {
       LOD1: [
-        { title: "Évaluer la capacité atelier", detail: `Moyens et contraintes disponibles pour le pilier ${pillarLabel}.` },
-        { title: "Identifier les risques terrain", detail: "Accès, montage, manutention, temps, moyens." },
-        { title: "Remonter les contraintes réelles", detail: "Contraintes opérationnelles à intégrer dès le cadrage." },
+        {
+          title: "Évaluer la capacité atelier",
+          detail: `Moyens et contraintes disponibles pour le pilier ${pillarLabel}.`,
+        },
+        {
+          title: "Identifier les risques terrain",
+          detail: "Accès, montage, manutention, temps, moyens.",
+        },
+        {
+          title: "Remonter les contraintes réelles",
+          detail: "Contraintes opérationnelles à intégrer dès le cadrage.",
+        },
       ],
       LOD2: [
-        { title: "Tester la faisabilité atelier", detail: "Séquences de fabrication, accès, montage, moyens réels." },
-        { title: "Contribuer au choix process", detail: "Retours opérationnels sur gamme prévisionnelle." },
-        { title: "Qualifier les risques d’exécution", detail: "Points bloquants ou sensibles avant passage en LOD3." },
+        {
+          title: "Tester la faisabilité atelier",
+          detail:
+            "Séquences de fabrication, accès, montage, moyens réels.",
+        },
+        {
+          title: "Contribuer au choix process",
+          detail: "Retours opérationnels sur gamme prévisionnelle.",
+        },
+        {
+          title: "Qualifier les risques d’exécution",
+          detail:
+            "Points bloquants ou sensibles avant passage en LOD3.",
+        },
       ],
       LOD3: [
-        { title: "Exécuter le dossier fabrication", detail: "Instructions atelier, moyens, temps, contrôle exécution." },
-        { title: "Tracer les écarts", detail: "Écarts entre définition, gamme et fabrication réelle." },
-        { title: "Boucler avec qualité et CND", detail: "Non-conformités, retours terrain, actions correctives." },
+        {
+          title: "Exécuter le dossier fabrication",
+          detail:
+            "Instructions atelier, moyens, temps, contrôle exécution.",
+        },
+        {
+          title: "Tracer les écarts",
+          detail:
+            "Écarts entre définition, gamme et fabrication réelle.",
+        },
+        {
+          title: "Boucler avec qualité et CND",
+          detail:
+            "Non-conformités, retours terrain, actions correctives.",
+        },
       ],
     },
+
     CND: {
       LOD1: [
-        { title: "Définir la stratégie de contrôle", detail: `Stratégie CND initiale pour le pilier ${pillarLabel}.` },
-        { title: "Identifier les zones critiques", detail: "Zones à risque, défauts potentiels, exigences qualité." },
-        { title: "Évaluer la contrôlabilité", detail: "Première lecture des accès et limites de contrôle." },
+        {
+          title: "Définir la stratégie de contrôle",
+          detail: `Stratégie CND initiale pour le pilier ${pillarLabel}.`,
+        },
+        {
+          title: "Identifier les zones critiques",
+          detail: "Zones à risque, défauts potentiels, exigences qualité.",
+        },
+        {
+          title: "Évaluer la contrôlabilité",
+          detail: "Première lecture des accès et limites de contrôle.",
+        },
       ],
       LOD2: [
-        { title: "Vérifier l’accessibilité contrôle", detail: "Contrôlabilité des formes, accès, moyens et méthodes candidates." },
-        { title: "Relier défauts et procédé", detail: "Défauts probables issus du process, criticité et détectabilité." },
-        { title: "Alerter sur les zones non contrôlables", detail: "Blocages à remonter vers BE, BM, SIM et FA." },
+        {
+          title: "Vérifier l’accessibilité contrôle",
+          detail:
+            "Contrôlabilité des formes, accès, moyens et méthodes candidates.",
+        },
+        {
+          title: "Relier défauts et procédé",
+          detail:
+            "Défauts probables issus du process, criticité et détectabilité.",
+        },
+        {
+          title: "Alerter sur les zones non contrôlables",
+          detail:
+            "Blocages à remonter vers BE, BM, SIM et FA.",
+        },
       ],
       LOD3: [
-        { title: "Figer la procédure CND", detail: "Procédure, critères d’acceptation, fréquence, moyen de contrôle." },
-        { title: "Produire le PV contrôle", detail: "Preuve qualité rattachée au produit et au pilier." },
-        { title: "Statuer sur la conformité", detail: "Décision conforme / non conforme / dérogation éventuelle." },
+        {
+          title: "Figer la procédure CND",
+          detail:
+            "Procédure, critères d’acceptation, fréquence, moyen de contrôle.",
+        },
+        {
+          title: "Produire le PV contrôle",
+          detail: "Preuve qualité rattachée au produit et au pilier.",
+        },
+        {
+          title: "Statuer sur la conformité",
+          detail:
+            "Décision conforme / non conforme / dérogation éventuelle.",
+        },
       ],
     },
   };
 
   return base[entity][lod];
+}
+
+function toolsFor(
+  entity: Exclude<Entity, "TRANSVERSE">,
+  pillar: Pillar,
+  lod: LOD
+): ToolName[] {
+  const toolsByEntityAndLOD: Record<
+    Exclude<Entity, "TRANSVERSE">,
+    Record<LOD, ToolName[]>
+  > = {
+    BE: {
+      LOD1: ["3DEXPERIENCE", "CATIA", "Excel"],
+      LOD2: ["3DEXPERIENCE", "CATIA", "EKL", "Python"],
+      LOD3: ["3DEXPERIENCE", "CATIA", "Excel"],
+    },
+
+    BM: {
+      LOD1: ["3DEXPERIENCE", "Excel"],
+      LOD2: ["3DEXPERIENCE", "CATIA", "ANSA", "Python", "Excel"],
+      LOD3: ["3DEXPERIENCE", "MES", "ERP", "Excel"],
+    },
+
+    SIM: {
+      LOD1: ["ABAQUS", "ANSA", "Python", "Excel"],
+      LOD2: [
+        "ABAQUS",
+        "ANSA",
+        "Moldflow",
+        "Flow-3D",
+        "ProCAST",
+        "Python",
+      ],
+      LOD3: ["ABAQUS", "ANSA", "Visual Mesh", "Python", "Power BI"],
+    },
+
+    FA: {
+      LOD1: ["MES", "ERP", "Excel"],
+      LOD2: ["MES", "ERP", "Python", "Excel"],
+      LOD3: ["MES", "ERP", "3DEXPERIENCE", "Excel"],
+    },
+
+    CND: {
+      LOD1: ["CIVA", "Excel", "3DEXPERIENCE"],
+      LOD2: ["CIVA", "Python", "Excel", "3DEXPERIENCE"],
+      LOD3: ["CIVA", "Excel", "3DEXPERIENCE", "Power BI"],
+    },
+  };
+
+  const baseTools = toolsByEntityAndLOD[entity][lod];
+
+  if (pillar === "PIECE" && entity === "BE" && !baseTools.includes("CATIA")) {
+    return [...baseTools, "CATIA"];
+  }
+
+  if (pillar === "HP" && entity === "SIM" && !baseTools.includes("ABAQUS")) {
+    return [...baseTools, "ABAQUS"];
+  }
+
+  if (pillar === "GPE" && entity === "BM" && !baseTools.includes("ANSA")) {
+    return [...baseTools, "ANSA"];
+  }
+
+  return baseTools;
 }
 
 function buildGraph() {
@@ -324,13 +617,16 @@ function buildGraph() {
       },
       {
         title: "Maintenir la synchronisation",
-        detail: "Pièce, HP et GPE doivent avancer ensemble pour éviter les désalignements.",
+        detail:
+          "Pièce, HP et GPE doivent avancer ensemble pour éviter les désalignements.",
       },
       {
         title: "Piloter les correspondances métiers",
-        detail: "BE, BM, SIM, FA et CND contribuent à chaque niveau de détail.",
+        detail:
+          "BE, BM, SIM, FA et CND contribuent à chaque niveau de détail.",
       },
     ],
+    tools: ["3DEXPERIENCE", "Power BI", "Excel"],
   });
 
   for (const lod of LODS) {
@@ -350,17 +646,21 @@ function buildGraph() {
       functions: [
         {
           title: "Synchroniser les piliers",
-          detail: "Vérifier que Pièce, HP et GPE possèdent le même niveau de maturité.",
+          detail:
+            "Vérifier que Pièce, HP et GPE possèdent le même niveau de maturité.",
         },
         {
           title: "Identifier les écarts",
-          detail: "Détecter les piliers en retard, bloqués ou insuffisamment justifiés.",
+          detail:
+            "Détecter les piliers en retard, bloqués ou insuffisamment justifiés.",
         },
         {
           title: "Préparer le passage LOD",
-          detail: "Garantir que tous les métiers ont contribué avant le changement de niveau.",
+          detail:
+            "Garantir que tous les métiers ont contribué avant le changement de niveau.",
         },
       ],
+      tools: ["3DEXPERIENCE", "Excel", "Power BI"],
     });
 
     addEdge("PROCESS_GLOBAL", `SYNC_${lod}`, "structure", `cadre ${lod}`, "moyenne");
@@ -390,12 +690,20 @@ function buildGraph() {
         },
         {
           title: "Assurer la cohérence globale",
-          detail: "Les décisions prises sur ce pilier peuvent impacter les autres piliers.",
+          detail:
+            "Les décisions prises sur ce pilier peuvent impacter les autres piliers.",
         },
       ],
+      tools: ["3DEXPERIENCE", "Excel"],
     });
 
-    addEdge("PROCESS_GLOBAL", `PILLAR_${pillar}`, "structure", `pilier ${PILLAR_LABELS[pillar]}`, "forte");
+    addEdge(
+      "PROCESS_GLOBAL",
+      `PILLAR_${pillar}`,
+      "structure",
+      `pilier ${PILLAR_LABELS[pillar]}`,
+      "forte"
+    );
   }
 
   addEdge("PILLAR_PIECE", "PILLAR_HP", "synchronise", "Pièce ↔ HP", "forte", true);
@@ -422,7 +730,8 @@ function buildGraph() {
         functions: [
           {
             title: "Agréger les contributions métiers",
-            detail: "Centraliser les fonctions BE, BM, SIM, FA et CND du même LOD.",
+            detail:
+              "Centraliser les fonctions BE, BM, SIM, FA et CND du même LOD.",
           },
           {
             title: "Préparer la décision de maturité",
@@ -433,10 +742,24 @@ function buildGraph() {
             detail: "Afficher les impacts entre métiers et entre piliers.",
           },
         ],
+        tools: ["3DEXPERIENCE", "Excel", "Power BI"],
       });
 
-      addEdge(`PILLAR_${pillar}`, hubId, "structure", `${PILLAR_LABELS[pillar]} ${lod}`, "moyenne");
-      addEdge(`SYNC_${lod}`, hubId, "synchronise", `alignement ${PILLAR_LABELS[pillar]} ${lod}`, "forte");
+      addEdge(
+        `PILLAR_${pillar}`,
+        hubId,
+        "structure",
+        `${PILLAR_LABELS[pillar]} ${lod}`,
+        "moyenne"
+      );
+
+      addEdge(
+        `SYNC_${lod}`,
+        hubId,
+        "synchronise",
+        `alignement ${PILLAR_LABELS[pillar]} ${lod}`,
+        "forte"
+      );
 
       for (const entity of ENTITIES) {
         const pos = ENTITY_OFFSETS[entity];
@@ -468,34 +791,136 @@ function buildGraph() {
           status,
           description: `${entity} contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud porte les fonctions métier associées.`,
           functions: functionsFor(entity, pillar, lod),
+          tools: toolsFor(entity, pillar, lod),
         });
 
-        addEdge(hubId, nodeId, "alimente", `${entity} contribue à ${PILLAR_LABELS[pillar]} ${lod}`, "moyenne");
+        addEdge(
+          hubId,
+          nodeId,
+          "alimente",
+          `${entity} contribue à ${PILLAR_LABELS[pillar]} ${lod}`,
+          "moyenne"
+        );
       }
 
-      addEdge(getNodeId(pillar, lod, "BE"), getNodeId(pillar, lod, "BM"), "impacte", "BE ↔ BM : conception fabricable", "forte", true);
-      addEdge(getNodeId(pillar, lod, "BE"), getNodeId(pillar, lod, "SIM"), "simule", "BE ↔ SIM : géométrie et hypothèses", "forte", true);
-      addEdge(getNodeId(pillar, lod, "BM"), getNodeId(pillar, lod, "FA"), "industrialise", "BM ↔ FA : gamme et exécution", "forte", true);
-      addEdge(getNodeId(pillar, lod, "FA"), getNodeId(pillar, lod, "CND"), "controle", "FA ↔ CND : fabrication et contrôle", "forte", true);
-      addEdge(getNodeId(pillar, lod, "SIM"), getNodeId(pillar, lod, "CND"), "justifie", "SIM ↔ CND : zones critiques", "forte", true);
+      addEdge(
+        getNodeId(pillar, lod, "BE"),
+        getNodeId(pillar, lod, "BM"),
+        "impacte",
+        "BE ↔ BM : conception fabricable",
+        "forte",
+        true
+      );
+
+      addEdge(
+        getNodeId(pillar, lod, "BE"),
+        getNodeId(pillar, lod, "SIM"),
+        "simule",
+        "BE ↔ SIM : géométrie et hypothèses",
+        "forte",
+        true
+      );
+
+      addEdge(
+        getNodeId(pillar, lod, "BM"),
+        getNodeId(pillar, lod, "FA"),
+        "industrialise",
+        "BM ↔ FA : gamme et exécution",
+        "forte",
+        true
+      );
+
+      addEdge(
+        getNodeId(pillar, lod, "FA"),
+        getNodeId(pillar, lod, "CND"),
+        "controle",
+        "FA ↔ CND : fabrication et contrôle",
+        "forte",
+        true
+      );
+
+      addEdge(
+        getNodeId(pillar, lod, "SIM"),
+        getNodeId(pillar, lod, "CND"),
+        "justifie",
+        "SIM ↔ CND : zones critiques",
+        "forte",
+        true
+      );
     }
 
-    addEdge(getNodeId(pillar, "LOD1"), getNodeId(pillar, "LOD2"), "construit", "passage LOD1 → LOD2", "forte");
-    addEdge(getNodeId(pillar, "LOD2"), getNodeId(pillar, "LOD3"), "valide", "passage LOD2 → LOD3", "forte");
+    addEdge(
+      getNodeId(pillar, "LOD1"),
+      getNodeId(pillar, "LOD2"),
+      "construit",
+      "passage LOD1 → LOD2",
+      "forte"
+    );
+
+    addEdge(
+      getNodeId(pillar, "LOD2"),
+      getNodeId(pillar, "LOD3"),
+      "valide",
+      "passage LOD2 → LOD3",
+      "forte"
+    );
 
     for (const entity of ENTITIES) {
-      addEdge(getNodeId(pillar, "LOD1", entity), getNodeId(pillar, "LOD2", entity), "construit", `${entity} LOD1 → LOD2`, "moyenne");
-      addEdge(getNodeId(pillar, "LOD2", entity), getNodeId(pillar, "LOD3", entity), "valide", `${entity} LOD2 → LOD3`, "moyenne");
+      addEdge(
+        getNodeId(pillar, "LOD1", entity),
+        getNodeId(pillar, "LOD2", entity),
+        "construit",
+        `${entity} LOD1 → LOD2`,
+        "moyenne"
+      );
+
+      addEdge(
+        getNodeId(pillar, "LOD2", entity),
+        getNodeId(pillar, "LOD3", entity),
+        "valide",
+        `${entity} LOD2 → LOD3`,
+        "moyenne"
+      );
     }
   }
 
   for (const lod of LODS) {
-    addEdge(getNodeId("PIECE", lod), getNodeId("HP", lod), "synchronise", `Pièce ↔ HP au ${lod}`, "forte", true);
-    addEdge(getNodeId("HP", lod), getNodeId("GPE", lod), "synchronise", `HP ↔ GPE au ${lod}`, "forte", true);
+    addEdge(
+      getNodeId("PIECE", lod),
+      getNodeId("HP", lod),
+      "synchronise",
+      `Pièce ↔ HP au ${lod}`,
+      "forte",
+      true
+    );
+
+    addEdge(
+      getNodeId("HP", lod),
+      getNodeId("GPE", lod),
+      "synchronise",
+      `HP ↔ GPE au ${lod}`,
+      "forte",
+      true
+    );
 
     for (const entity of ENTITIES) {
-      addEdge(getNodeId("PIECE", lod, entity), getNodeId("HP", lod, entity), "synchronise", `${entity} : Pièce ↔ HP`, "moyenne", true);
-      addEdge(getNodeId("HP", lod, entity), getNodeId("GPE", lod, entity), "synchronise", `${entity} : HP ↔ GPE`, "moyenne", true);
+      addEdge(
+        getNodeId("PIECE", lod, entity),
+        getNodeId("HP", lod, entity),
+        "synchronise",
+        `${entity} : Pièce ↔ HP`,
+        "moyenne",
+        true
+      );
+
+      addEdge(
+        getNodeId("HP", lod, entity),
+        getNodeId("GPE", lod, entity),
+        "synchronise",
+        `${entity} : HP ↔ GPE`,
+        "moyenne",
+        true
+      );
     }
   }
 
@@ -515,17 +940,21 @@ function buildGraph() {
       functions: [
         {
           title: "Détecter les écarts de maturité",
-          detail: "Comparer les états LOD1, LOD2 et LOD3 entre Pièce, HP et GPE.",
+          detail:
+            "Comparer les états LOD1, LOD2 et LOD3 entre Pièce, HP et GPE.",
         },
         {
           title: "Identifier les métiers bloquants",
-          detail: "Exemple : CND bloqué sur GPE LOD2 à cause d’une accessibilité contrôle insuffisante.",
+          detail:
+            "Exemple : CND bloqué sur GPE LOD2 à cause d’une accessibilité contrôle insuffisante.",
         },
         {
           title: "Éviter les décisions locales",
-          detail: "Empêcher une validation isolée qui ne serait pas cohérente avec les autres piliers.",
+          detail:
+            "Empêcher une validation isolée qui ne serait pas cohérente avec les autres piliers.",
         },
       ],
+      tools: ["Power BI", "Excel", "3DEXPERIENCE"],
     },
     {
       id: "DECISION_ARBITRAGE",
@@ -542,7 +971,8 @@ function buildGraph() {
       functions: [
         {
           title: "Arbitrer les conflits",
-          detail: "Décider entre performance produit, fabricabilité, simulation, fabrication et contrôle.",
+          detail:
+            "Décider entre performance produit, fabricabilité, simulation, fabrication et contrôle.",
         },
         {
           title: "Définir les actions correctives",
@@ -550,9 +980,11 @@ function buildGraph() {
         },
         {
           title: "Tracer la décision",
-          detail: "Associer la décision aux preuves numériques et aux fonctions métier impactées.",
+          detail:
+            "Associer la décision aux preuves numériques et aux fonctions métier impactées.",
         },
       ],
+      tools: ["3DEXPERIENCE", "Excel", "Power BI"],
     },
     {
       id: "PROOF_MATURITY",
@@ -569,28 +1001,87 @@ function buildGraph() {
       functions: [
         {
           title: "Rassembler les preuves",
-          detail: "Plans, CAO, rapports simulation, gammes, PV CND, décisions RdC.",
+          detail:
+            "Plans, CAO, rapports simulation, gammes, PV CND, décisions RdC.",
         },
         {
           title: "Justifier le passage LOD3",
-          detail: "Valider que chaque pilier dispose de preuves suffisantes.",
+          detail:
+            "Valider que chaque pilier dispose de preuves suffisantes.",
         },
         {
           title: "Alimenter la continuité numérique",
-          detail: "Créer un lien exploitable entre données produit, processus et décisions.",
+          detail:
+            "Créer un lien exploitable entre données produit, processus et décisions.",
         },
       ],
+      tools: ["3DEXPERIENCE", "Power BI", "Excel"],
     }
   );
 
-  addEdge(getNodeId("GPE", "LOD2", "CND"), "RISK_DESALIGNEMENT", "bloque", "CND GPE LOD2 bloqué", "forte");
-  addEdge("RISK_DESALIGNEMENT", "DECISION_ARBITRAGE", "decisionne", "arbitrage nécessaire", "forte");
-  addEdge("DECISION_ARBITRAGE", getNodeId("GPE", "LOD2", "BE"), "impacte", "retour vers définition", "forte");
-  addEdge("DECISION_ARBITRAGE", getNodeId("GPE", "LOD2", "BM"), "impacte", "retour vers gamme", "forte");
-  addEdge(getNodeId("PIECE", "LOD3", "SIM"), "PROOF_MATURITY", "justifie", "rapport simulation", "moyenne");
-  addEdge(getNodeId("HP", "LOD3", "BM"), "PROOF_MATURITY", "justifie", "gamme validée", "moyenne");
-  addEdge(getNodeId("GPE", "LOD3", "CND"), "PROOF_MATURITY", "justifie", "PV contrôle", "moyenne");
-  addEdge("PROOF_MATURITY", "PROCESS_GLOBAL", "valide", "preuve de maturité globale", "forte");
+  addEdge(
+    getNodeId("GPE", "LOD2", "CND"),
+    "RISK_DESALIGNEMENT",
+    "bloque",
+    "CND GPE LOD2 bloqué",
+    "forte"
+  );
+
+  addEdge(
+    "RISK_DESALIGNEMENT",
+    "DECISION_ARBITRAGE",
+    "decisionne",
+    "arbitrage nécessaire",
+    "forte"
+  );
+
+  addEdge(
+    "DECISION_ARBITRAGE",
+    getNodeId("GPE", "LOD2", "BE"),
+    "impacte",
+    "retour vers définition",
+    "forte"
+  );
+
+  addEdge(
+    "DECISION_ARBITRAGE",
+    getNodeId("GPE", "LOD2", "BM"),
+    "impacte",
+    "retour vers gamme",
+    "forte"
+  );
+
+  addEdge(
+    getNodeId("PIECE", "LOD3", "SIM"),
+    "PROOF_MATURITY",
+    "justifie",
+    "rapport simulation",
+    "moyenne"
+  );
+
+  addEdge(
+    getNodeId("HP", "LOD3", "BM"),
+    "PROOF_MATURITY",
+    "justifie",
+    "gamme validée",
+    "moyenne"
+  );
+
+  addEdge(
+    getNodeId("GPE", "LOD3", "CND"),
+    "PROOF_MATURITY",
+    "justifie",
+    "PV contrôle",
+    "moyenne"
+  );
+
+  addEdge(
+    "PROOF_MATURITY",
+    "PROCESS_GLOBAL",
+    "valide",
+    "preuve de maturité globale",
+    "forte"
+  );
 
   return { nodes, edges };
 }
@@ -599,16 +1090,26 @@ function nodeRadius(node: GraphNode) {
   if (node.category === "process") return 52;
   if (node.category === "pillar_hub") return 42;
   if (node.category === "gate") return 38;
-  if (node.category === "risk" || node.category === "decision" || node.category === "proof") return 40;
+  if (
+    node.category === "risk" ||
+    node.category === "decision" ||
+    node.category === "proof"
+  ) {
+    return 40;
+  }
   return 31;
 }
 
 function nodeFill(node: GraphNode) {
-  if (node.category === "pillar_hub" && node.pillar) return PILLAR_COLORS[node.pillar];
+  if (node.category === "pillar_hub" && node.pillar) {
+    return PILLAR_COLORS[node.pillar];
+  }
+
   if (node.category === "gate") return "#e5e7eb";
   if (node.category === "risk") return "#ef4444";
   if (node.category === "decision") return "#facc15";
   if (node.category === "proof") return "#a78bfa";
+
   return ENTITY_COLORS[node.entity];
 }
 
@@ -619,8 +1120,11 @@ export default function ViewerPage() {
   const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
   const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
   const [entityFilter, setEntityFilter] = useState<Entity | "ALL">("ALL");
+  const [toolFilter, setToolFilter] = useState<ToolName | "ALL">("ALL");
   const [relationFilter, setRelationFilter] = useState<RelationType | "ALL">("ALL");
-  const [viewMode, setViewMode] = useState<"global" | "piliers" | "lod" | "fonctions" | "risques">("global");
+  const [viewMode, setViewMode] = useState<
+    "global" | "piliers" | "lod" | "fonctions" | "risques"
+  >("global");
   const [search, setSearch] = useState("");
 
   const nodeById = useMemo(() => {
@@ -633,16 +1137,19 @@ export default function ViewerPage() {
     const ids = new Set<string>();
 
     for (const node of nodes) {
+      const searchValue = search.toLowerCase().trim();
+
       const matchSearch =
-        search.trim().length === 0 ||
-        node.label.toLowerCase().includes(search.toLowerCase()) ||
-        node.subtitle.toLowerCase().includes(search.toLowerCase()) ||
-        node.description.toLowerCase().includes(search.toLowerCase()) ||
+        searchValue.length === 0 ||
+        node.label.toLowerCase().includes(searchValue) ||
+        node.subtitle.toLowerCase().includes(searchValue) ||
+        node.description.toLowerCase().includes(searchValue) ||
         node.functions.some(
           (item) =>
-            item.title.toLowerCase().includes(search.toLowerCase()) ||
-            item.detail.toLowerCase().includes(search.toLowerCase())
-        );
+            item.title.toLowerCase().includes(searchValue) ||
+            item.detail.toLowerCase().includes(searchValue)
+        ) ||
+        node.tools?.some((tool) => TOOL_LABELS[tool].toLowerCase().includes(searchValue));
 
       const matchPillar =
         pillarFilter === "ALL" ||
@@ -657,7 +1164,7 @@ export default function ViewerPage() {
         lodFilter === "ALL" ||
         node.lod === lodFilter ||
         node.category === "process" ||
-        node.category === "pillar_hub" && !node.lod ||
+        (node.category === "pillar_hub" && !node.lod) ||
         node.category === "risk" ||
         node.category === "decision" ||
         node.category === "proof";
@@ -666,6 +1173,16 @@ export default function ViewerPage() {
         entityFilter === "ALL" ||
         node.entity === entityFilter ||
         node.entity === "TRANSVERSE";
+
+      const matchTool =
+        toolFilter === "ALL" ||
+        node.tools?.includes(toolFilter) ||
+        node.category === "process" ||
+        node.category === "pillar_hub" ||
+        node.category === "gate" ||
+        node.category === "risk" ||
+        node.category === "decision" ||
+        node.category === "proof";
 
       let matchView = true;
 
@@ -699,7 +1216,14 @@ export default function ViewerPage() {
           node.id === "PROCESS_GLOBAL";
       }
 
-      if (matchSearch && matchPillar && matchLOD && matchEntity && matchView) {
+      if (
+        matchSearch &&
+        matchPillar &&
+        matchLOD &&
+        matchEntity &&
+        matchTool &&
+        matchView
+      ) {
         ids.add(node.id);
       }
     }
@@ -714,12 +1238,26 @@ export default function ViewerPage() {
     }
 
     return ids;
-  }, [nodes, edges, search, pillarFilter, lodFilter, entityFilter, viewMode]);
+  }, [
+    nodes,
+    edges,
+    search,
+    pillarFilter,
+    lodFilter,
+    entityFilter,
+    toolFilter,
+    viewMode,
+  ]);
 
   const visibleEdges = useMemo(() => {
     return edges.filter((edge) => {
       const matchRelation = relationFilter === "ALL" || edge.type === relationFilter;
-      return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target) && matchRelation;
+
+      return (
+        visibleNodeIds.has(edge.source) &&
+        visibleNodeIds.has(edge.target) &&
+        matchRelation
+      );
     });
   }, [edges, visibleNodeIds, relationFilter]);
 
@@ -736,7 +1274,9 @@ export default function ViewerPage() {
   }, [edges, selectedNodeId]);
 
   const connectedEdges = useMemo(() => {
-    return edges.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId);
+    return edges.filter(
+      (edge) => edge.source === selectedNodeId || edge.target === selectedNodeId
+    );
   }, [edges, selectedNodeId]);
 
   const visibleNodes = nodes.filter((node) => visibleNodeIds.has(node.id));
@@ -750,7 +1290,9 @@ export default function ViewerPage() {
   function edgeOpacity(edge: GraphEdge) {
     if (!selectedNodeId) return 0.68;
     if (edge.source === selectedNodeId || edge.target === selectedNodeId) return 1;
-    if (connectedNodeIds.has(edge.source) && connectedNodeIds.has(edge.target)) return 0.35;
+    if (connectedNodeIds.has(edge.source) && connectedNodeIds.has(edge.target)) {
+      return 0.35;
+    }
     return 0.08;
   }
 
@@ -758,6 +1300,7 @@ export default function ViewerPage() {
     setPillarFilter("ALL");
     setLodFilter("ALL");
     setEntityFilter("ALL");
+    setToolFilter("ALL");
     setRelationFilter("ALL");
     setViewMode("global");
     setSearch("");
@@ -769,7 +1312,7 @@ export default function ViewerPage() {
       <section className="topbar">
         <div>
           <p className="eyebrow">Mini-PLM · Viewer réseau V0.1</p>
-          <h1>Architecture Pièce / HP / GPE × LOD × Métiers × Fonctions</h1>
+          <h1>Architecture Pièce / HP / GPE × LOD × Métiers × Outils</h1>
         </div>
 
         <div className="toolbar">
@@ -779,7 +1322,19 @@ export default function ViewerPage() {
             placeholder="Rechercher..."
           />
 
-          <select value={viewMode} onChange={(event) => setViewMode(event.target.value as any)}>
+          <select
+            value={viewMode}
+            onChange={(event) =>
+              setViewMode(
+                event.target.value as
+                  | "global"
+                  | "piliers"
+                  | "lod"
+                  | "fonctions"
+                  | "risques"
+              )
+            }
+          >
             <option value="global">Vue globale</option>
             <option value="piliers">Vue piliers</option>
             <option value="lod">Vue LOD</option>
@@ -787,21 +1342,30 @@ export default function ViewerPage() {
             <option value="risques">Vue risques / preuves</option>
           </select>
 
-          <select value={pillarFilter} onChange={(event) => setPillarFilter(event.target.value as any)}>
+          <select
+            value={pillarFilter}
+            onChange={(event) => setPillarFilter(event.target.value as Pillar | "ALL")}
+          >
             <option value="ALL">Tous piliers</option>
             <option value="PIECE">Pièce</option>
             <option value="HP">HP</option>
             <option value="GPE">GPE</option>
           </select>
 
-          <select value={lodFilter} onChange={(event) => setLodFilter(event.target.value as any)}>
+          <select
+            value={lodFilter}
+            onChange={(event) => setLodFilter(event.target.value as LOD | "ALL")}
+          >
             <option value="ALL">Tous LOD</option>
             <option value="LOD1">LOD1</option>
             <option value="LOD2">LOD2</option>
             <option value="LOD3">LOD3</option>
           </select>
 
-          <select value={entityFilter} onChange={(event) => setEntityFilter(event.target.value as any)}>
+          <select
+            value={entityFilter}
+            onChange={(event) => setEntityFilter(event.target.value as Entity | "ALL")}
+          >
             <option value="ALL">Tous métiers</option>
             <option value="BE">BE</option>
             <option value="BM">BM</option>
@@ -810,7 +1374,26 @@ export default function ViewerPage() {
             <option value="CND">CND</option>
           </select>
 
-          <select value={relationFilter} onChange={(event) => setRelationFilter(event.target.value as any)}>
+          <select
+            value={toolFilter}
+            onChange={(event) =>
+              setToolFilter(event.target.value as ToolName | "ALL")
+            }
+          >
+            <option value="ALL">Tous outils</option>
+            {TOOLS.map((tool) => (
+              <option key={tool} value={tool}>
+                {TOOL_LABELS[tool]}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={relationFilter}
+            onChange={(event) =>
+              setRelationFilter(event.target.value as RelationType | "ALL")
+            }
+          >
             <option value="ALL">Toutes relations</option>
             <option value="structure">structure</option>
             <option value="synchronise">synchronise</option>
@@ -908,7 +1491,10 @@ export default function ViewerPage() {
             {visibleNodes.map((node) => {
               const radius = nodeRadius(node);
               const selected = selectedNodeId === node.id;
-              const labelLines = wrapLabel(node.label, node.category === "entity_function" ? 8 : 16);
+              const labelLines = wrapLabel(
+                node.label,
+                node.category === "entity_function" ? 8 : 16
+              );
 
               return (
                 <g
@@ -931,7 +1517,9 @@ export default function ViewerPage() {
                     fill="transparent"
                     stroke="rgba(15,23,42,0.55)"
                     strokeWidth="6"
-                    strokeDasharray={`${Math.max(node.maturity, 1)} ${100 - Math.max(node.maturity, 1)}`}
+                    strokeDasharray={`${Math.max(node.maturity, 1)} ${
+                      100 - Math.max(node.maturity, 1)
+                    }`}
                     pathLength="100"
                     transform="rotate(-90)"
                   />
@@ -967,7 +1555,9 @@ export default function ViewerPage() {
                       {selectedNode.subtitle}
                       {selectedNode.pillar ? ` · ${PILLAR_LABELS[selectedNode.pillar]}` : ""}
                       {selectedNode.lod ? ` · ${selectedNode.lod}` : ""}
-                      {selectedNode.entity !== "TRANSVERSE" ? ` · ${ENTITY_LABELS[selectedNode.entity]}` : ""}
+                      {selectedNode.entity !== "TRANSVERSE"
+                        ? ` · ${ENTITY_LABELS[selectedNode.entity]}`
+                        : ""}
                     </p>
                   </div>
                 </div>
@@ -1018,6 +1608,22 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
+            <p className="panelLabel">Outils utilisés</p>
+
+            {selectedNode?.tools?.length ? (
+              <div className="toolList">
+                {selectedNode.tools.map((tool) => (
+                  <span key={`${selectedNode.id}_${tool}`} className="toolChip">
+                    {TOOL_LABELS[tool]}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="empty">Aucun outil directement associé à ce nœud.</p>
+            )}
+          </div>
+
+          <div className="panelBlock">
             <p className="panelLabel">Relations directes</p>
 
             <div className="edgeList">
@@ -1033,10 +1639,15 @@ export default function ViewerPage() {
                       key={edge.id}
                       className="edgeItem"
                       onClick={() =>
-                        setSelectedNodeId(edge.source === selectedNodeId ? edge.target : edge.source)
+                        setSelectedNodeId(
+                          edge.source === selectedNodeId ? edge.target : edge.source
+                        )
                       }
                     >
-                      <span className="relationColor" style={{ background: RELATION_COLORS[edge.type] }} />
+                      <span
+                        className="relationColor"
+                        style={{ background: RELATION_COLORS[edge.type] }}
+                      />
                       <span>
                         <strong>{edge.type}</strong>
                         <small>
@@ -1063,6 +1674,9 @@ export default function ViewerPage() {
               </li>
               <li>
                 <strong>Bulles métier</strong> : BE, BM, SIM, FA et CND.
+              </li>
+              <li>
+                <strong>Filtre outil</strong> : 3DEXPERIENCE, CATIA, ABAQUS, ANSA, Python, etc.
               </li>
               <li>
                 <strong>Liens cyan</strong> : synchronisation entre piliers.
@@ -1124,7 +1738,7 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 970px;
+          max-width: 1050px;
         }
 
         .toolbar input,
@@ -1339,6 +1953,24 @@ export default function ViewerPage() {
           color: #cbd5e1;
           font-size: 12.5px;
           line-height: 1.45;
+        }
+
+        .toolList {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+        }
+
+        .toolChip {
+          display: inline-flex;
+          align-items: center;
+          border: 1px solid rgba(147, 197, 253, 0.32);
+          background: rgba(30, 64, 175, 0.22);
+          color: #dbeafe;
+          border-radius: 999px;
+          padding: 7px 10px;
+          font-size: 12px;
+          font-weight: 750;
         }
 
         .edgeList {
