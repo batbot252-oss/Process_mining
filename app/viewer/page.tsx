@@ -25,9 +25,27 @@ type ToolName =
   | "ERP"
   | "CIVA";
 
-type SimulationJob = "INJ_C" | "INJ_N" | "PRE_CHAUF" | "SDF";
+type BeSubTrade =
+  | "BE_AERO"
+  | "BE_MECA"
+  | "BE_THER"
+  | "BE_SIM_DIM"
+  | "BE_SIM_METAL";
 
-type BubbleFamily = "METIER" | "OUTIL" | "SIMULATION";
+type BmSubTrade = "BM_OUT" | "BM_CAO";
+
+type SimSubTrade =
+  | "SIM_INJ_C"
+  | "SIM_INJ_N"
+  | "SIM_PRE_CHAU"
+  | "SIM_SDF";
+
+type BubbleFamily =
+  | "METIER"
+  | "BE_SUB"
+  | "BM_SUB"
+  | "SIMULATION"
+  | "OUTIL";
 
 type Position = {
   x: number;
@@ -59,8 +77,8 @@ type BubbleOverride = {
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_overrides_v1";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_v1";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v1";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v1";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -84,11 +102,21 @@ const TOOLS: ToolName[] = [
   "CIVA",
 ];
 
-const SIMULATION_JOBS: SimulationJob[] = [
-  "INJ_C",
-  "INJ_N",
-  "PRE_CHAUF",
-  "SDF",
+const BE_SUB_TRADES: BeSubTrade[] = [
+  "BE_AERO",
+  "BE_MECA",
+  "BE_THER",
+  "BE_SIM_DIM",
+  "BE_SIM_METAL",
+];
+
+const BM_SUB_TRADES: BmSubTrade[] = ["BM_OUT", "BM_CAO"];
+
+const SIM_SUB_TRADES: SimSubTrade[] = [
+  "SIM_INJ_C",
+  "SIM_INJ_N",
+  "SIM_PRE_CHAU",
+  "SIM_SDF",
 ];
 
 const PILLAR_LABELS: Record<Pillar, string> = {
@@ -127,11 +155,24 @@ const TOOL_LABELS: Record<ToolName, string> = {
   CIVA: "CIVA / CND",
 };
 
-const SIMULATION_JOB_LABELS: Record<SimulationJob, string> = {
-  INJ_C: "Inj_c",
-  INJ_N: "Inj_n",
-  PRE_CHAUF: "Pré_chauf",
-  SDF: "SDF",
+const BE_SUB_TRADE_LABELS: Record<BeSubTrade, string> = {
+  BE_AERO: "Aéro",
+  BE_MECA: "Méca",
+  BE_THER: "Ther",
+  BE_SIM_DIM: "Sim_dim",
+  BE_SIM_METAL: "Sim_métal",
+};
+
+const BM_SUB_TRADE_LABELS: Record<BmSubTrade, string> = {
+  BM_OUT: "Out",
+  BM_CAO: "CAO",
+};
+
+const SIM_SUB_TRADE_LABELS: Record<SimSubTrade, string> = {
+  SIM_INJ_C: "Inj_C",
+  SIM_INJ_N: "Inj_N",
+  SIM_PRE_CHAU: "Pré_chau",
+  SIM_SDF: "Sdf",
 };
 
 const ENTITY_COLORS: Record<Entity, string> = {
@@ -144,8 +185,10 @@ const ENTITY_COLORS: Record<Entity, string> = {
 
 const FAMILY_COLORS: Record<BubbleFamily, string> = {
   METIER: "#60a5fa",
-  OUTIL: "#38bdf8",
+  BE_SUB: "#60a5fa",
+  BM_SUB: "#f59e0b",
   SIMULATION: "#a78bfa",
+  OUTIL: "#38bdf8",
 };
 
 const PILLAR_COLORS: Record<Pillar, string> = {
@@ -170,7 +213,9 @@ function clamp(value: number, min: number, max: number) {
 function labelForFamilyValue(family: BubbleFamily, value: string) {
   if (family === "METIER") return value;
   if (family === "OUTIL") return TOOL_LABELS[value as ToolName];
-  return SIMULATION_JOB_LABELS[value as SimulationJob];
+  if (family === "BE_SUB") return BE_SUB_TRADE_LABELS[value as BeSubTrade];
+  if (family === "BM_SUB") return BM_SUB_TRADE_LABELS[value as BmSubTrade];
+  return SIM_SUB_TRADE_LABELS[value as SimSubTrade];
 }
 
 function colorForFamilyValue(family: BubbleFamily, value: string) {
@@ -181,10 +226,16 @@ function colorForFamilyValue(family: BubbleFamily, value: string) {
 function subtitleForFamilyValue(family: BubbleFamily, lod: LOD) {
   if (family === "METIER") return `${lod} · Métier`;
   if (family === "OUTIL") return `${lod} · Outil`;
-  return `${lod} · Métier simulation`;
+  if (family === "BE_SUB") return `${lod} · Sous-métier BE`;
+  if (family === "BM_SUB") return `${lod} · Sous-métier BM`;
+  return `${lod} · Sous-métier SIM`;
 }
 
-function descriptionForFamilyValue(family: BubbleFamily, value: string, lod: LOD) {
+function descriptionForFamilyValue(
+  family: BubbleFamily,
+  value: string,
+  lod: LOD
+) {
   const label = labelForFamilyValue(family, value);
 
   if (family === "METIER") {
@@ -195,7 +246,15 @@ function descriptionForFamilyValue(family: BubbleFamily, value: string, lod: LOD
     return `Bulle outil libre : ${label}. Elle appartient à l’onglet ${lod} et peut être placée dans la zone où l’outil intervient dans ton architecture.`;
   }
 
-  return `Bulle métier simulation libre : ${label}. Elle appartient à l’onglet ${lod} et peut être positionnée dans la zone simulation ou dans tout autre emplacement utile.`;
+  if (family === "BE_SUB") {
+    return `Sous-métier BE : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle dans le processus.`;
+  }
+
+  if (family === "BM_SUB") {
+    return `Sous-métier BM : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle méthodes.`;
+  }
+
+  return `Sous-métier SIM : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle simulation.`;
 }
 
 function getOptionsForFamily(family: BubbleFamily) {
@@ -213,9 +272,23 @@ function getOptionsForFamily(family: BubbleFamily) {
     }));
   }
 
-  return SIMULATION_JOBS.map((job) => ({
-    value: job,
-    label: SIMULATION_JOB_LABELS[job],
+  if (family === "BE_SUB") {
+    return BE_SUB_TRADES.map((subTrade) => ({
+      value: subTrade,
+      label: BE_SUB_TRADE_LABELS[subTrade],
+    }));
+  }
+
+  if (family === "BM_SUB") {
+    return BM_SUB_TRADES.map((subTrade) => ({
+      value: subTrade,
+      label: BM_SUB_TRADE_LABELS[subTrade],
+    }));
+  }
+
+  return SIM_SUB_TRADES.map((subTrade) => ({
+    value: subTrade,
+    label: SIM_SUB_TRADE_LABELS[subTrade],
   }));
 }
 
@@ -256,18 +329,50 @@ function buildDefaultBubbles(): Bubble[] {
         });
       });
 
-      SIMULATION_JOBS.forEach((job, index) => {
+      BE_SUB_TRADES.forEach((subTrade, index) => {
         bubbles.push({
-          id: `${lod}_${pillar}_SIM_${job}`,
-          label: SIMULATION_JOB_LABELS[job],
-          subtitle: `${LOD_LABELS[lod]} · ${PILLAR_LABELS[pillar]}`,
+          id: `${lod}_${pillar}_BE_SUB_${subTrade}`,
+          label: BE_SUB_TRADE_LABELS[subTrade],
+          subtitle: `${LOD_LABELS[lod]} · ${PILLAR_LABELS[pillar]} · BE`,
+          family: "BE_SUB",
+          pillar,
+          lod,
+          x: frame.x + 58 + index * 78,
+          y: frame.y + 165,
+          color: FAMILY_COLORS.BE_SUB,
+          description: `Sous-métier BE ${BE_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
+          visibleDefault: false,
+        });
+      });
+
+      BM_SUB_TRADES.forEach((subTrade, index) => {
+        bubbles.push({
+          id: `${lod}_${pillar}_BM_SUB_${subTrade}`,
+          label: BM_SUB_TRADE_LABELS[subTrade],
+          subtitle: `${LOD_LABELS[lod]} · ${PILLAR_LABELS[pillar]} · BM`,
+          family: "BM_SUB",
+          pillar,
+          lod,
+          x: frame.x + 110 + index * 95,
+          y: frame.y + 225,
+          color: FAMILY_COLORS.BM_SUB,
+          description: `Sous-métier BM ${BM_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
+          visibleDefault: false,
+        });
+      });
+
+      SIM_SUB_TRADES.forEach((subTrade, index) => {
+        bubbles.push({
+          id: `${lod}_${pillar}_SIM_SUB_${subTrade}`,
+          label: SIM_SUB_TRADE_LABELS[subTrade],
+          subtitle: `${LOD_LABELS[lod]} · ${PILLAR_LABELS[pillar]} · SIM`,
           family: "SIMULATION",
           pillar,
           lod,
-          x: frame.x + 82 + index * 78,
-          y: frame.y + 158,
+          x: frame.x + 74 + index * 82,
+          y: frame.y + 285,
           color: FAMILY_COLORS.SIMULATION,
-          description: `Métier simulation ${SIMULATION_JOB_LABELS[job]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
+          description: `Sous-métier SIM ${SIM_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
         });
       });
@@ -321,6 +426,24 @@ export default function ViewerPage() {
   const [newBubbleFamily, setNewBubbleFamily] =
     useState<BubbleFamily>("METIER");
   const [newBubbleValue, setNewBubbleValue] = useState<string>("BE");
+
+  const allBaseBubbles = useMemo(() => {
+    return [...defaultBubbles, ...customBubbles];
+  }, [defaultBubbles, customBubbles]);
+
+  const bubbles = useMemo(() => {
+    return allBaseBubbles.map((bubble) => {
+      const override = bubbleOverrides[bubble.id];
+
+      return {
+        ...bubble,
+        x: override?.x ?? bubble.x,
+        y: override?.y ?? bubble.y,
+        visible: override?.visible ?? bubble.visibleDefault,
+        deleted: override?.deleted ?? false,
+      };
+    });
+  }, [allBaseBubbles, bubbleOverrides]);
 
   useEffect(() => {
     try {
@@ -387,24 +510,6 @@ export default function ViewerPage() {
         `${nextLod}_PIECE_BE`
     );
   }
-
-  const allBaseBubbles = useMemo(() => {
-    return [...defaultBubbles, ...customBubbles];
-  }, [defaultBubbles, customBubbles]);
-
-  const bubbles = useMemo(() => {
-    return allBaseBubbles.map((bubble) => {
-      const override = bubbleOverrides[bubble.id];
-
-      return {
-        ...bubble,
-        x: override?.x ?? bubble.x,
-        y: override?.y ?? bubble.y,
-        visible: override?.visible ?? bubble.visibleDefault,
-        deleted: override?.deleted ?? false,
-      };
-    });
-  }, [allBaseBubbles, bubbleOverrides]);
 
   const activeLodBubbles = useMemo(() => {
     return bubbles.filter((bubble) => bubble.lod === activeLod && !bubble.deleted);
@@ -672,15 +777,17 @@ export default function ViewerPage() {
 
   const newBubbleOptions = getOptionsForFamily(newBubbleFamily);
 
-  const activeLodVisibleCount = activeLodBubbles.filter((bubble) => bubble.visible).length;
+  const activeLodVisibleCount = activeLodBubbles.filter(
+    (bubble) => bubble.visible
+  ).length;
   const activeLodTotalCount = activeLodBubbles.length;
 
   return (
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.4</p>
-          <h1>Placement libre par onglet LOD dans Pièce / HP / GPE</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.5</p>
+          <h1>Placement libre par LOD avec sous-métiers BE / BM / SIM</h1>
         </div>
 
         <div className="toolbar">
@@ -698,8 +805,10 @@ export default function ViewerPage() {
           >
             <option value="ALL">Toutes bulles</option>
             <option value="METIER">Métiers</option>
+            <option value="BE_SUB">Sous-métiers BE</option>
+            <option value="BM_SUB">Sous-métiers BM</option>
+            <option value="SIMULATION">Sous-métiers SIM</option>
             <option value="OUTIL">Outils</option>
-            <option value="SIMULATION">Métiers SIM</option>
           </select>
 
           <select
@@ -951,8 +1060,10 @@ export default function ViewerPage() {
                 }
               >
                 <option value="METIER">Métier</option>
+                <option value="BE_SUB">Sous-métier BE</option>
+                <option value="BM_SUB">Sous-métier BM</option>
+                <option value="SIMULATION">Sous-métier SIM</option>
                 <option value="OUTIL">Outil</option>
-                <option value="SIMULATION">Métier SIM</option>
               </select>
 
               <select
@@ -971,7 +1082,7 @@ export default function ViewerPage() {
 
             <p className="hint">
               La bulle ajoutée est créée uniquement dans l’onglet {activeLod}.
-              Chaque LOD possède sa propre bibliothèque et ses propres positions.
+              Tu peux ajouter plusieurs fois Aéro, Méca, Out, CAO, Inj_C, etc.
             </p>
           </div>
 
@@ -1047,7 +1158,7 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.4</p>
+            <p className="panelLabel">Lecture V0.5</p>
 
             <ul className="readingList">
               <li>
@@ -1057,13 +1168,16 @@ export default function ViewerPage() {
                 <strong>Cadres fixes</strong> : Pièce, HP et GPE conservés dans chaque onglet.
               </li>
               <li>
-                <strong>Bibliothèque</strong> : bulles filtrées par onglet LOD actif.
+                <strong>Sous-métiers BE</strong> : Aéro, Méca, Ther, Sim_dim, Sim_métal.
+              </li>
+              <li>
+                <strong>Sous-métiers BM</strong> : Out, CAO.
+              </li>
+              <li>
+                <strong>Sous-métiers SIM</strong> : Inj_C, Inj_N, Pré_chau, Sdf.
               </li>
               <li>
                 <strong>Placement</strong> : positions sauvegardées séparément pour chaque LOD.
-              </li>
-              <li>
-                <strong>Affichage</strong> : cocher, décocher ou supprimer les bulles dans l’onglet actif.
               </li>
             </ul>
           </div>
