@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 
 type Pillar = "PIECE" | "HP" | "GPE";
 type LOD = "LOD1" | "LOD2" | "LOD3";
-type Entity = "BE" | "BM" | "SIM" | "FA" | "CND" | "TRANSVERSE";
+
+type Entity = "BE" | "BM" | "SIM" | "FA" | "CND";
 
 type ToolName =
   | "3DEXPERIENCE"
@@ -25,76 +27,39 @@ type ToolName =
 
 type SimulationJob = "INJ_C" | "INJ_N" | "PRE_CHAUF" | "SDF";
 
-type NodeCategory =
-  | "process"
-  | "pillar_hub"
-  | "entity_function"
-  | "gate"
-  | "risk"
-  | "proof"
-  | "decision";
+type BubbleFamily = "METIER" | "OUTIL" | "SIMULATION";
 
-type NodeStatus = "non_demarre" | "en_cours" | "bloque" | "valide";
-
-type RelationType =
-  | "structure"
-  | "alimente"
-  | "impacte"
-  | "synchronise"
-  | "construit"
-  | "valide"
-  | "bloque"
-  | "justifie"
-  | "controle"
-  | "industrialise"
-  | "fabrique"
-  | "simule"
-  | "decisionne";
-
-type Criticality = "faible" | "moyenne" | "forte";
-
-type FunctionItem = {
-  title: string;
-  detail: string;
-};
-
-type NodePosition = {
+type Position = {
   x: number;
   y: number;
 };
 
-type GraphNode = {
+type Bubble = {
   id: string;
   label: string;
   subtitle: string;
-  entity: Entity;
+  family: BubbleFamily;
   pillar?: Pillar;
   lod?: LOD;
-  category: NodeCategory;
   x: number;
   y: number;
-  maturity: number;
-  status: NodeStatus;
+  color: string;
   description: string;
-  functions: FunctionItem[];
-  tools?: ToolName[];
-  simulationJobs?: SimulationJob[];
+  visibleDefault: boolean;
+  isCustom?: boolean;
 };
 
-type GraphEdge = {
-  id: string;
-  source: string;
-  target: string;
-  type: RelationType;
-  label: string;
-  criticality: Criticality;
-  bidirectional?: boolean;
+type BubbleOverride = {
+  x?: number;
+  y?: number;
+  visible?: boolean;
 };
 
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_NODE_POSITIONS = "plm_viewer_v01_custom_node_positions";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_overrides_v1";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_v1";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -118,6 +83,31 @@ const TOOLS: ToolName[] = [
   "CIVA",
 ];
 
+const SIMULATION_JOBS: SimulationJob[] = [
+  "INJ_C",
+  "INJ_N",
+  "PRE_CHAUF",
+  "SDF",
+];
+
+const PILLAR_LABELS: Record<Pillar, string> = {
+  PIECE: "Pièce",
+  HP: "HP",
+  GPE: "GPE",
+};
+
+const LOD_LABELS: Record<LOD, string> = {
+  LOD1: "LOD1",
+  LOD2: "LOD2",
+  LOD3: "LOD3",
+};
+
+const LOD_DETAILS: Record<LOD, string> = {
+  LOD1: "Cadrage",
+  LOD2: "Convergence",
+  LOD3: "Validation",
+};
+
 const TOOL_LABELS: Record<ToolName, string> = {
   "3DEXPERIENCE": "3DEXPERIENCE",
   CATIA: "CATIA",
@@ -136,39 +126,11 @@ const TOOL_LABELS: Record<ToolName, string> = {
   CIVA: "CIVA / CND",
 };
 
-const SIMULATION_JOBS: SimulationJob[] = [
-  "INJ_C",
-  "INJ_N",
-  "PRE_CHAUF",
-  "SDF",
-];
-
 const SIMULATION_JOB_LABELS: Record<SimulationJob, string> = {
   INJ_C: "Inj_c",
   INJ_N: "Inj_n",
   PRE_CHAUF: "Pré_chauf",
   SDF: "SDF",
-};
-
-const PILLAR_LABELS: Record<Pillar, string> = {
-  PIECE: "Pièce",
-  HP: "HP",
-  GPE: "GPE",
-};
-
-const LOD_LABELS: Record<LOD, string> = {
-  LOD1: "LOD1 · Cadrage",
-  LOD2: "LOD2 · Convergence",
-  LOD3: "LOD3 · Validation",
-};
-
-const ENTITY_LABELS: Record<Entity, string> = {
-  BE: "BE",
-  BM: "BM",
-  SIM: "SIM",
-  FA: "FA",
-  CND: "CND",
-  TRANSVERSE: "Transverse",
 };
 
 const ENTITY_COLORS: Record<Entity, string> = {
@@ -177,7 +139,12 @@ const ENTITY_COLORS: Record<Entity, string> = {
   SIM: "#a78bfa",
   FA: "#34d399",
   CND: "#f87171",
-  TRANSVERSE: "#e5e7eb",
+};
+
+const FAMILY_COLORS: Record<BubbleFamily, string> = {
+  METIER: "#60a5fa",
+  OUTIL: "#38bdf8",
+  SIMULATION: "#a78bfa",
 };
 
 const PILLAR_COLORS: Record<Pillar, string> = {
@@ -186,1092 +153,268 @@ const PILLAR_COLORS: Record<Pillar, string> = {
   GPE: "#c084fc",
 };
 
-const STATUS_COLORS: Record<NodeStatus, string> = {
-  non_demarre: "#64748b",
-  en_cours: "#38bdf8",
-  bloque: "#ef4444",
-  valide: "#22c55e",
+const PILLAR_FRAMES: Record<Pillar, { x: number; y: number; w: number; h: number }> = {
+  PIECE: { x: 170, y: 145, w: 400, h: 755 },
+  HP: { x: 600, y: 145, w: 400, h: 755 },
+  GPE: { x: 1030, y: 145, w: 400, h: 755 },
 };
 
-const RELATION_COLORS: Record<RelationType, string> = {
-  structure: "#94a3b8",
-  alimente: "#cbd5e1",
-  impacte: "#f97316",
-  synchronise: "#22d3ee",
-  construit: "#60a5fa",
-  valide: "#22c55e",
-  bloque: "#ef4444",
-  justifie: "#a78bfa",
-  controle: "#f87171",
-  industrialise: "#f59e0b",
-  fabrique: "#34d399",
-  simule: "#818cf8",
-  decisionne: "#facc15",
-};
-
-const PILLAR_X: Record<Pillar, number> = {
-  PIECE: 360,
-  HP: 800,
-  GPE: 1240,
-};
-
-const LOD_Y: Record<LOD, number> = {
-  LOD1: 250,
-  LOD2: 530,
-  LOD3: 810,
-};
-
-const ENTITY_OFFSETS: Record<
-  Exclude<Entity, "TRANSVERSE">,
-  { dx: number; dy: number }
-> = {
-  BE: { dx: -128, dy: -58 },
-  BM: { dx: 0, dy: -84 },
-  SIM: { dx: 128, dy: -58 },
-  FA: { dx: -74, dy: 68 },
-  CND: { dx: 74, dy: 68 },
+const LOD_ROWS: Record<LOD, { y: number; h: number }> = {
+  LOD1: { y: 185, h: 205 },
+  LOD2: { y: 430, h: 205 },
+  LOD3: { y: 675, h: 205 },
 };
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
 
-function wrapLabel(label: string, maxLength = 15) {
-  const words = label.split(" ");
-  const lines: string[] = [];
-  let current = "";
+function labelForFamilyValue(family: BubbleFamily, value: string) {
+  if (family === "METIER") return value;
+  if (family === "OUTIL") return TOOL_LABELS[value as ToolName];
+  return SIMULATION_JOB_LABELS[value as SimulationJob];
+}
 
-  for (const word of words) {
-    if (`${current} ${word}`.trim().length > maxLength) {
-      if (current) lines.push(current);
-      current = word;
-    } else {
-      current = `${current} ${word}`.trim();
-    }
+function colorForFamilyValue(family: BubbleFamily, value: string) {
+  if (family === "METIER") return ENTITY_COLORS[value as Entity];
+  return FAMILY_COLORS[family];
+}
+
+function subtitleForFamilyValue(family: BubbleFamily) {
+  if (family === "METIER") return "Métier";
+  if (family === "OUTIL") return "Outil";
+  return "Métier simulation";
+}
+
+function descriptionForFamilyValue(family: BubbleFamily, value: string) {
+  const label = labelForFamilyValue(family, value);
+
+  if (family === "METIER") {
+    return `Bulle métier libre : ${label}. Elle peut être placée manuellement dans le cadre Pièce, HP ou GPE, au niveau LOD souhaité.`;
   }
 
-  if (current) lines.push(current);
-  return lines.slice(0, 4);
+  if (family === "OUTIL") {
+    return `Bulle outil libre : ${label}. Elle peut être placée dans la zone où l’outil intervient dans ton architecture.`;
+  }
+
+  return `Bulle métier simulation libre : ${label}. Elle peut être positionnée dans la zone simulation ou dans tout autre emplacement utile.`;
 }
 
-function getNodeId(
-  pillar: Pillar,
-  lod: LOD,
-  entity?: Exclude<Entity, "TRANSVERSE">
-) {
-  if (!entity) return `${pillar}_${lod}_HUB`;
-  return `${pillar}_${lod}_${entity}`;
+function getOptionsForFamily(family: BubbleFamily) {
+  if (family === "METIER") {
+    return ENTITIES.map((entity) => ({
+      value: entity,
+      label: entity,
+    }));
+  }
+
+  if (family === "OUTIL") {
+    return TOOLS.map((tool) => ({
+      value: tool,
+      label: TOOL_LABELS[tool],
+    }));
+  }
+
+  return SIMULATION_JOBS.map((job) => ({
+    value: job,
+    label: SIMULATION_JOB_LABELS[job],
+  }));
 }
 
-function maturityByLOD(lod: LOD) {
-  if (lod === "LOD1") return 90;
-  if (lod === "LOD2") return 55;
-  return 25;
+function bubbleWidth(label: string) {
+  return clamp(label.length * 8 + 42, 70, 172);
 }
 
-function statusByLOD(lod: LOD): NodeStatus {
-  if (lod === "LOD1") return "valide";
-  if (lod === "LOD2") return "en_cours";
-  return "non_demarre";
-}
+function getInitialBubblePosition(index: number): Position {
+  const col = index % 5;
+  const row = Math.floor(index / 5);
 
-function functionsFor(
-  entity: Exclude<Entity, "TRANSVERSE">,
-  pillar: Pillar,
-  lod: LOD
-): FunctionItem[] {
-  const pillarLabel = PILLAR_LABELS[pillar];
-
-  const base: Record<
-    Exclude<Entity, "TRANSVERSE">,
-    Record<LOD, FunctionItem[]>
-  > = {
-    BE: {
-      LOD1: [
-        {
-          title: "Définir l’intention produit",
-          detail: `Fonction attendue sur le pilier ${pillarLabel}.`,
-        },
-        {
-          title: "Identifier les interfaces",
-          detail: "Interfaces fonctionnelles, géométriques et système.",
-        },
-        {
-          title: "Porter les exigences",
-          detail:
-            "Exigences principales, contraintes d’encombrement et hypothèses fortes.",
-        },
-      ],
-      LOD2: [
-        {
-          title: "Construire la géométrie paramétrée",
-          detail: "Variantes CAO, paramètres, règles de conception.",
-        },
-        {
-          title: "Préparer la convergence",
-          detail:
-            "Tolérances provisoires, interfaces détaillées, compromis métier.",
-        },
-        {
-          title: "Intégrer les retours métiers",
-          detail:
-            "Retours BM, SIM, FA et CND dans la définition intermédiaire.",
-        },
-      ],
-      LOD3: [
-        {
-          title: "Libérer la définition",
-          detail: "CAO détaillée, plans, tolérances et interfaces figées.",
-        },
-        {
-          title: "Tracer la maturité",
-          detail: "Lien entre définition finale, preuves et décisions.",
-        },
-        {
-          title: "Supporter le dossier final",
-          detail:
-            "Données exploitables par méthodes, fabrication et contrôle.",
-        },
-      ],
-    },
-
-    BM: {
-      LOD1: [
-        {
-          title: "Définir le procédé pressenti",
-          detail: `Première logique industrielle du pilier ${pillarLabel}.`,
-        },
-        {
-          title: "Identifier les contraintes méthodes",
-          detail:
-            "Fabricabilité, outillage, chaîne process, hypothèses de gamme.",
-        },
-        {
-          title: "Contribuer aux règles de conception",
-          detail: "Contraintes process à intégrer très tôt par le BE.",
-        },
-      ],
-      LOD2: [
-        {
-          title: "Construire la gamme prévisionnelle",
-          detail:
-            "Séquences principales, paramètres process, outillages pressentis.",
-        },
-        {
-          title: "Vérifier la fabricabilité",
-          detail:
-            "Analyse des formes, accès, reprises, bridage, risques process.",
-        },
-        {
-          title: "Boucler avec BE et SIM",
-          detail:
-            "Retour sur géométrie et besoin de justification par simulation.",
-        },
-      ],
-      LOD3: [
-        {
-          title: "Figer la gamme détaillée",
-          detail: "Fiches méthodes, paramètres process, outillages validés.",
-        },
-        {
-          title: "Préparer l’exécution FA",
-          detail: "Dossier transmissible atelier.",
-        },
-        {
-          title: "Associer le plan de contrôle",
-          detail: "Lien direct avec CND et qualité.",
-        },
-      ],
-    },
-
-    SIM: {
-      LOD1: [
-        {
-          title: "Identifier les phénomènes physiques",
-          detail: `Phénomènes à vérifier sur le pilier ${pillarLabel}.`,
-        },
-        {
-          title: "Cadrer Inj_c / Inj_n",
-          detail:
-            "Première lecture des besoins de simulation injection côté courant et côté noyau.",
-        },
-        {
-          title: "Préparer la stratégie simulation",
-          detail:
-            "Niveau de modèle attendu selon la maturité LOD et les métiers simulation concernés.",
-        },
-      ],
-      LOD2: [
-        {
-          title: "Construire le modèle intermédiaire",
-          detail:
-            "Modèle simplifié ou semi-détaillé, hypothèses, maillage et préparation calcul.",
-        },
-        {
-          title: "Comparer les variantes",
-          detail:
-            "Analyse de sensibilité sur Inj_c, Inj_n et Pré_chauf selon le besoin du pilier.",
-        },
-        {
-          title: "Identifier les zones sensibles",
-          detail: "Zones critiques à partager avec BE, BM, FA et CND.",
-        },
-      ],
-      LOD3: [
-        {
-          title: "Produire le rapport validé",
-          detail:
-            "Calculs finaux, marges, justification et traçabilité sur Inj_c, Inj_n, Pré_chauf et SDF.",
-        },
-        {
-          title: "Justifier la définition",
-          detail: "Lien entre résultats simulation, CAO libérée et décision RdC.",
-        },
-        {
-          title: "Appuyer la preuve numérique",
-          detail: "Élément de preuve exploitable dans la validation produit.",
-        },
-      ],
-    },
-
-    FA: {
-      LOD1: [
-        {
-          title: "Évaluer la capacité atelier",
-          detail: `Moyens et contraintes disponibles pour le pilier ${pillarLabel}.`,
-        },
-        {
-          title: "Identifier les risques terrain",
-          detail: "Accès, montage, manutention, temps, moyens.",
-        },
-        {
-          title: "Remonter les contraintes réelles",
-          detail: "Contraintes opérationnelles à intégrer dès le cadrage.",
-        },
-      ],
-      LOD2: [
-        {
-          title: "Tester la faisabilité atelier",
-          detail: "Séquences de fabrication, accès, montage, moyens réels.",
-        },
-        {
-          title: "Contribuer au choix process",
-          detail: "Retours opérationnels sur gamme prévisionnelle.",
-        },
-        {
-          title: "Qualifier les risques d’exécution",
-          detail: "Points bloquants ou sensibles avant passage en LOD3.",
-        },
-      ],
-      LOD3: [
-        {
-          title: "Exécuter le dossier fabrication",
-          detail: "Instructions atelier, moyens, temps, contrôle exécution.",
-        },
-        {
-          title: "Tracer les écarts",
-          detail: "Écarts entre définition, gamme et fabrication réelle.",
-        },
-        {
-          title: "Boucler avec qualité et CND",
-          detail: "Non-conformités, retours terrain, actions correctives.",
-        },
-      ],
-    },
-
-    CND: {
-      LOD1: [
-        {
-          title: "Définir la stratégie de contrôle",
-          detail: `Stratégie CND initiale pour le pilier ${pillarLabel}.`,
-        },
-        {
-          title: "Identifier les zones critiques",
-          detail: "Zones à risque, défauts potentiels, exigences qualité.",
-        },
-        {
-          title: "Évaluer la contrôlabilité",
-          detail: "Première lecture des accès et limites de contrôle.",
-        },
-      ],
-      LOD2: [
-        {
-          title: "Vérifier l’accessibilité contrôle",
-          detail:
-            "Contrôlabilité des formes, accès, moyens et méthodes candidates.",
-        },
-        {
-          title: "Relier défauts et procédé",
-          detail:
-            "Défauts probables issus du process, criticité et détectabilité.",
-        },
-        {
-          title: "Alerter sur les zones non contrôlables",
-          detail: "Blocages à remonter vers BE, BM, SIM et FA.",
-        },
-      ],
-      LOD3: [
-        {
-          title: "Figer la procédure CND",
-          detail:
-            "Procédure, critères d’acceptation, fréquence, moyen de contrôle.",
-        },
-        {
-          title: "Produire le PV contrôle",
-          detail: "Preuve qualité rattachée au produit et au pilier.",
-        },
-        {
-          title: "Statuer sur la conformité",
-          detail: "Décision conforme / non conforme / dérogation éventuelle.",
-        },
-      ],
-    },
+  return {
+    x: 1180 + col * 68,
+    y: 205 + row * 46,
   };
-
-  return base[entity][lod];
 }
 
-function toolsFor(
-  entity: Exclude<Entity, "TRANSVERSE">,
-  pillar: Pillar,
-  lod: LOD
-): ToolName[] {
-  const toolsByEntityAndLOD: Record<
-    Exclude<Entity, "TRANSVERSE">,
-    Record<LOD, ToolName[]>
-  > = {
-    BE: {
-      LOD1: ["3DEXPERIENCE", "CATIA", "Excel"],
-      LOD2: ["3DEXPERIENCE", "CATIA", "EKL", "Python"],
-      LOD3: ["3DEXPERIENCE", "CATIA", "Excel"],
-    },
-
-    BM: {
-      LOD1: ["3DEXPERIENCE", "Excel"],
-      LOD2: ["3DEXPERIENCE", "CATIA", "ANSA", "Python", "Excel"],
-      LOD3: ["3DEXPERIENCE", "MES", "ERP", "Excel"],
-    },
-
-    SIM: {
-      LOD1: ["ABAQUS", "ANSA", "Python", "Excel"],
-      LOD2: [
-        "ABAQUS",
-        "ANSA",
-        "Moldflow",
-        "Flow-3D",
-        "ProCAST",
-        "Python",
-      ],
-      LOD3: ["ABAQUS", "ANSA", "Visual Mesh", "Python", "Power BI"],
-    },
-
-    FA: {
-      LOD1: ["MES", "ERP", "Excel"],
-      LOD2: ["MES", "ERP", "Python", "Excel"],
-      LOD3: ["MES", "ERP", "3DEXPERIENCE", "Excel"],
-    },
-
-    CND: {
-      LOD1: ["CIVA", "Excel", "3DEXPERIENCE"],
-      LOD2: ["CIVA", "Python", "Excel", "3DEXPERIENCE"],
-      LOD3: ["CIVA", "Excel", "3DEXPERIENCE", "Power BI"],
-    },
-  };
-
-  const baseTools = toolsByEntityAndLOD[entity][lod];
-
-  if (pillar === "PIECE" && entity === "BE" && !baseTools.includes("CATIA")) {
-    return [...baseTools, "CATIA"];
-  }
-
-  if (pillar === "HP" && entity === "SIM" && !baseTools.includes("ABAQUS")) {
-    return [...baseTools, "ABAQUS"];
-  }
-
-  if (pillar === "GPE" && entity === "BM" && !baseTools.includes("ANSA")) {
-    return [...baseTools, "ANSA"];
-  }
-
-  return baseTools;
-}
-
-function simulationJobsFor(
-  entity: Exclude<Entity, "TRANSVERSE">,
-  pillar: Pillar,
-  lod: LOD
-): SimulationJob[] {
-  if (entity !== "SIM") return [];
-
-  if (lod === "LOD1") {
-    return ["INJ_C", "INJ_N"];
-  }
-
-  if (lod === "LOD2") {
-    return ["INJ_C", "INJ_N", "PRE_CHAUF"];
-  }
-
-  if (pillar === "PIECE") {
-    return ["INJ_C", "INJ_N", "PRE_CHAUF", "SDF"];
-  }
-
-  if (pillar === "HP") {
-    return ["INJ_C", "PRE_CHAUF", "SDF"];
-  }
-
-  return ["INJ_N", "PRE_CHAUF", "SDF"];
-}
-
-function buildGraph() {
-  const nodes: GraphNode[] = [];
-  const edges: GraphEdge[] = [];
-  let edgeIndex = 0;
-
-  const addEdge = (
-    source: string,
-    target: string,
-    type: RelationType,
-    label: string,
-    criticality: Criticality = "moyenne",
-    bidirectional = false
-  ) => {
-    edgeIndex += 1;
-    edges.push({
-      id: `E_${edgeIndex}`,
-      source,
-      target,
-      type,
-      label,
-      criticality,
-      bidirectional,
-    });
-  };
-
-  nodes.push({
-    id: "PROCESS_GLOBAL",
-    label: "Processus global",
-    subtitle: "Pièce + HP + GPE synchronisés",
-    entity: "TRANSVERSE",
-    category: "process",
-    x: WIDTH / 2,
-    y: 76,
-    maturity: 55,
-    status: "en_cours",
-    description:
-      "Architecture globale du processus. Les trois piliers Pièce, HP et GPE sont toujours considérés ensemble, avec une lecture LOD1, LOD2 et LOD3.",
-    functions: [
-      {
-        title: "Structurer la continuité numérique",
-        detail: "Le produit est suivi par pilier, par LOD et par métier.",
-      },
-      {
-        title: "Maintenir la synchronisation",
-        detail:
-          "Pièce, HP et GPE doivent avancer ensemble pour éviter les désalignements.",
-      },
-      {
-        title: "Piloter les correspondances métiers",
-        detail:
-          "BE, BM, SIM, FA et CND contribuent à chaque niveau de détail.",
-      },
-    ],
-    tools: ["3DEXPERIENCE", "Power BI", "Excel"],
-  });
-
-  for (const lod of LODS) {
-    nodes.push({
-      id: `SYNC_${lod}`,
-      label: `Synchro ${lod}`,
-      subtitle: "Pièce + HP + GPE",
-      entity: "TRANSVERSE",
-      lod,
-      category: "gate",
-      x: 96,
-      y: LOD_Y[lod],
-      maturity: maturityByLOD(lod),
-      status: statusByLOD(lod),
-      description:
-        "Point de synchronisation transverse. Aucun pilier ne doit être traité seul : Pièce, HP et GPE doivent être alignés au même LOD.",
-      functions: [
-        {
-          title: "Synchroniser les piliers",
-          detail:
-            "Vérifier que Pièce, HP et GPE possèdent le même niveau de maturité.",
-        },
-        {
-          title: "Identifier les écarts",
-          detail:
-            "Détecter les piliers en retard, bloqués ou insuffisamment justifiés.",
-        },
-        {
-          title: "Préparer le passage LOD",
-          detail:
-            "Garantir que tous les métiers ont contribué avant le changement de niveau.",
-        },
-      ],
-      tools: ["3DEXPERIENCE", "Excel", "Power BI"],
-    });
-
-    addEdge(
-      "PROCESS_GLOBAL",
-      `SYNC_${lod}`,
-      "structure",
-      `cadre ${lod}`,
-      "moyenne"
-    );
-  }
+function buildDefaultBubbles(): Bubble[] {
+  const bubbles: Bubble[] = [];
 
   for (const pillar of PILLARS) {
-    nodes.push({
-      id: `PILLAR_${pillar}`,
-      label: PILLAR_LABELS[pillar],
-      subtitle: "Pilier processus",
-      entity: "TRANSVERSE",
-      pillar,
-      category: "pillar_hub",
-      x: PILLAR_X[pillar],
-      y: 76,
-      maturity: 55,
-      status: "en_cours",
-      description: `Pilier ${PILLAR_LABELS[pillar]} du processus global. Ce pilier doit être analysé avec les deux autres piliers, jamais isolément.`,
-      functions: [
-        {
-          title: "Porter la maturité pilier",
-          detail: `Suivre les contributions LOD1, LOD2 et LOD3 du pilier ${PILLAR_LABELS[pillar]}.`,
-        },
-        {
-          title: "Croiser les métiers",
-          detail: "BE, BM, SIM, FA et CND apportent chacun leurs fonctions.",
-        },
-        {
-          title: "Assurer la cohérence globale",
-          detail:
-            "Les décisions prises sur ce pilier peuvent impacter les autres piliers.",
-        },
-      ],
-      tools: ["3DEXPERIENCE", "Excel"],
-    });
+    const frame = PILLAR_FRAMES[pillar];
 
-    addEdge(
-      "PROCESS_GLOBAL",
-      `PILLAR_${pillar}`,
-      "structure",
-      `pilier ${PILLAR_LABELS[pillar]}`,
-      "forte"
-    );
-  }
-
-  addEdge(
-    "PILLAR_PIECE",
-    "PILLAR_HP",
-    "synchronise",
-    "Pièce ↔ HP",
-    "forte",
-    true
-  );
-
-  addEdge(
-    "PILLAR_HP",
-    "PILLAR_GPE",
-    "synchronise",
-    "HP ↔ GPE",
-    "forte",
-    true
-  );
-
-  addEdge(
-    "PILLAR_PIECE",
-    "PILLAR_GPE",
-    "synchronise",
-    "Pièce ↔ GPE",
-    "forte",
-    true
-  );
-
-  for (const pillar of PILLARS) {
     for (const lod of LODS) {
-      const hubId = getNodeId(pillar, lod);
+      const row = LOD_ROWS[lod];
 
-      nodes.push({
-        id: hubId,
-        label: `${PILLAR_LABELS[pillar]} ${lod}`,
-        subtitle: LOD_LABELS[lod],
-        entity: "TRANSVERSE",
-        pillar,
-        lod,
-        category: "pillar_hub",
-        x: PILLAR_X[pillar],
-        y: LOD_Y[lod],
-        maturity: maturityByLOD(lod),
-        status: statusByLOD(lod),
-        description: `Nœud de synthèse du pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Il agrège les contributions BE, BM, SIM, FA et CND.`,
-        functions: [
-          {
-            title: "Agréger les contributions métiers",
-            detail:
-              "Centraliser les fonctions BE, BM, SIM, FA et CND du même LOD.",
-          },
-          {
-            title: "Préparer la décision de maturité",
-            detail: "Identifier si le pilier peut passer au LOD suivant.",
-          },
-          {
-            title: "Tracer les dépendances",
-            detail: "Afficher les impacts entre métiers et entre piliers.",
-          },
-        ],
-        tools: ["3DEXPERIENCE", "Excel", "Power BI"],
-      });
-
-      addEdge(
-        `PILLAR_${pillar}`,
-        hubId,
-        "structure",
-        `${PILLAR_LABELS[pillar]} ${lod}`,
-        "moyenne"
-      );
-
-      addEdge(
-        `SYNC_${lod}`,
-        hubId,
-        "synchronise",
-        `alignement ${PILLAR_LABELS[pillar]} ${lod}`,
-        "forte"
-      );
-
-      for (const entity of ENTITIES) {
-        const pos = ENTITY_OFFSETS[entity];
-        const nodeId = getNodeId(pillar, lod, entity);
-
-        let status = statusByLOD(lod);
-        let maturity = maturityByLOD(lod);
-
-        if (pillar === "GPE" && lod === "LOD2" && entity === "CND") {
-          status = "bloque";
-          maturity = 35;
-        }
-
-        if (pillar === "PIECE" && lod === "LOD2" && entity === "BE") {
-          maturity = 70;
-        }
-
-        const simulationJobs = simulationJobsFor(entity, pillar, lod);
-
-        nodes.push({
-          id: nodeId,
-          label: `${entity}`,
+      ENTITIES.forEach((entity, index) => {
+        bubbles.push({
+          id: `${pillar}_${lod}_${entity}`,
+          label: entity,
           subtitle: `${PILLAR_LABELS[pillar]} · ${lod}`,
-          entity,
+          family: "METIER",
           pillar,
           lod,
-          category: "entity_function",
-          x: PILLAR_X[pillar] + pos.dx,
-          y: LOD_Y[lod] + pos.dy,
-          maturity,
-          status,
-          description:
-            entity === "SIM"
-              ? `SIM contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud regroupe les métiers simulation associés : Inj_c, Inj_n, Pré_chauf et SDF selon le niveau de maturité.`
-              : `${entity} contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud porte les fonctions métier associées.`,
-          functions: functionsFor(entity, pillar, lod),
-          tools: toolsFor(entity, pillar, lod),
-          simulationJobs,
+          x: frame.x + 65 + index * 68,
+          y: row.y + 72,
+          color: ENTITY_COLORS[entity],
+          description: `${entity} associé par défaut au pilier ${PILLAR_LABELS[pillar]} et au niveau ${lod}. Cette bulle reste librement déplaçable.`,
+          visibleDefault: true,
         });
+      });
 
-        addEdge(
-          hubId,
-          nodeId,
-          "alimente",
-          `${entity} contribue à ${PILLAR_LABELS[pillar]} ${lod}`,
-          "moyenne"
-        );
-      }
-
-      addEdge(
-        getNodeId(pillar, lod, "BE"),
-        getNodeId(pillar, lod, "BM"),
-        "impacte",
-        "BE ↔ BM : conception fabricable",
-        "forte",
-        true
-      );
-
-      addEdge(
-        getNodeId(pillar, lod, "BE"),
-        getNodeId(pillar, lod, "SIM"),
-        "simule",
-        "BE ↔ SIM : géométrie et hypothèses",
-        "forte",
-        true
-      );
-
-      addEdge(
-        getNodeId(pillar, lod, "BM"),
-        getNodeId(pillar, lod, "FA"),
-        "industrialise",
-        "BM ↔ FA : gamme et exécution",
-        "forte",
-        true
-      );
-
-      addEdge(
-        getNodeId(pillar, lod, "FA"),
-        getNodeId(pillar, lod, "CND"),
-        "controle",
-        "FA ↔ CND : fabrication et contrôle",
-        "forte",
-        true
-      );
-
-      addEdge(
-        getNodeId(pillar, lod, "SIM"),
-        getNodeId(pillar, lod, "CND"),
-        "justifie",
-        "SIM ↔ CND : zones critiques",
-        "forte",
-        true
-      );
-    }
-
-    addEdge(
-      getNodeId(pillar, "LOD1"),
-      getNodeId(pillar, "LOD2"),
-      "construit",
-      "passage LOD1 → LOD2",
-      "forte"
-    );
-
-    addEdge(
-      getNodeId(pillar, "LOD2"),
-      getNodeId(pillar, "LOD3"),
-      "valide",
-      "passage LOD2 → LOD3",
-      "forte"
-    );
-
-    for (const entity of ENTITIES) {
-      addEdge(
-        getNodeId(pillar, "LOD1", entity),
-        getNodeId(pillar, "LOD2", entity),
-        "construit",
-        `${entity} LOD1 → LOD2`,
-        "moyenne"
-      );
-
-      addEdge(
-        getNodeId(pillar, "LOD2", entity),
-        getNodeId(pillar, "LOD3", entity),
-        "valide",
-        `${entity} LOD2 → LOD3`,
-        "moyenne"
-      );
+      SIMULATION_JOBS.forEach((job, index) => {
+        bubbles.push({
+          id: `${pillar}_${lod}_SIM_${job}`,
+          label: SIMULATION_JOB_LABELS[job],
+          subtitle: `${PILLAR_LABELS[pillar]} · ${lod}`,
+          family: "SIMULATION",
+          pillar,
+          lod,
+          x: frame.x + 82 + index * 78,
+          y: row.y + 132,
+          color: FAMILY_COLORS.SIMULATION,
+          description: `Métier simulation ${SIMULATION_JOB_LABELS[job]} disponible pour ${PILLAR_LABELS[pillar]} au niveau ${lod}.`,
+          visibleDefault: false,
+        });
+      });
     }
   }
 
-  for (const lod of LODS) {
-    addEdge(
-      getNodeId("PIECE", lod),
-      getNodeId("HP", lod),
-      "synchronise",
-      `Pièce ↔ HP au ${lod}`,
-      "forte",
-      true
-    );
+  TOOLS.forEach((tool, index) => {
+    const position = getInitialBubblePosition(index);
 
-    addEdge(
-      getNodeId("HP", lod),
-      getNodeId("GPE", lod),
-      "synchronise",
-      `HP ↔ GPE au ${lod}`,
-      "forte",
-      true
-    );
+    bubbles.push({
+      id: `TOOL_${tool}`,
+      label: TOOL_LABELS[tool],
+      subtitle: "Outil libre",
+      family: "OUTIL",
+      x: position.x,
+      y: position.y,
+      color: FAMILY_COLORS.OUTIL,
+      description: `Outil ${TOOL_LABELS[tool]} disponible comme bulle libre. Tu peux l’afficher, le déplacer et le placer dans la zone souhaitée.`,
+      visibleDefault: false,
+    });
+  });
 
-    for (const entity of ENTITIES) {
-      addEdge(
-        getNodeId("PIECE", lod, entity),
-        getNodeId("HP", lod, entity),
-        "synchronise",
-        `${entity} : Pièce ↔ HP`,
-        "moyenne",
-        true
-      );
-
-      addEdge(
-        getNodeId("HP", lod, entity),
-        getNodeId("GPE", lod, entity),
-        "synchronise",
-        `${entity} : HP ↔ GPE`,
-        "moyenne",
-        true
-      );
-    }
-  }
-
-  nodes.push(
-    {
-      id: "RISK_DESALIGNEMENT",
-      label: "Risque désalignement",
-      subtitle: "Pièce / HP / GPE",
-      entity: "TRANSVERSE",
-      category: "risk",
-      x: 1500,
-      y: 408,
-      maturity: 15,
-      status: "bloque",
-      description:
-        "Risque principal de cette architecture : un pilier ou un métier avance sans correspondance équivalente dans les autres piliers.",
-      functions: [
-        {
-          title: "Détecter les écarts de maturité",
-          detail:
-            "Comparer les états LOD1, LOD2 et LOD3 entre Pièce, HP et GPE.",
-        },
-        {
-          title: "Identifier les métiers bloquants",
-          detail:
-            "Exemple : CND bloqué sur GPE LOD2 à cause d’une accessibilité contrôle insuffisante.",
-        },
-        {
-          title: "Éviter les décisions locales",
-          detail:
-            "Empêcher une validation isolée qui ne serait pas cohérente avec les autres piliers.",
-        },
-      ],
-      tools: ["Power BI", "Excel", "3DEXPERIENCE"],
-    },
-    {
-      id: "DECISION_ARBITRAGE",
-      label: "Décision arbitrage",
-      subtitle: "Revue de conception",
-      entity: "TRANSVERSE",
-      category: "decision",
-      x: 1500,
-      y: 560,
-      maturity: 70,
-      status: "en_cours",
-      description:
-        "Décision transverse permettant d’arbitrer entre contraintes BE, BM, SIM, FA et CND sur les trois piliers.",
-      functions: [
-        {
-          title: "Arbitrer les conflits",
-          detail:
-            "Décider entre performance produit, fabricabilité, simulation, fabrication et contrôle.",
-        },
-        {
-          title: "Définir les actions correctives",
-          detail: "Réorienter un pilier, un métier ou un niveau LOD.",
-        },
-        {
-          title: "Tracer la décision",
-          detail:
-            "Associer la décision aux preuves numériques et aux fonctions métier impactées.",
-        },
-      ],
-      tools: ["3DEXPERIENCE", "Excel", "Power BI"],
-    },
-    {
-      id: "PROOF_MATURITY",
-      label: "Preuve maturité",
-      subtitle: "LOD3 / validation",
-      entity: "TRANSVERSE",
-      category: "proof",
-      x: 1500,
-      y: 712,
-      maturity: 65,
-      status: "en_cours",
-      description:
-        "Ensemble de preuves permettant de justifier la maturité du processus : CAO libérée, gamme, calculs, fabrication et PV contrôle.",
-      functions: [
-        {
-          title: "Rassembler les preuves",
-          detail:
-            "Plans, CAO, rapports simulation, gammes, PV CND, décisions RdC.",
-        },
-        {
-          title: "Justifier le passage LOD3",
-          detail:
-            "Valider que chaque pilier dispose de preuves suffisantes.",
-        },
-        {
-          title: "Alimenter la continuité numérique",
-          detail:
-            "Créer un lien exploitable entre données produit, processus et décisions.",
-        },
-      ],
-      tools: ["3DEXPERIENCE", "Power BI", "Excel"],
-    }
-  );
-
-  addEdge(
-    getNodeId("GPE", "LOD2", "CND"),
-    "RISK_DESALIGNEMENT",
-    "bloque",
-    "CND GPE LOD2 bloqué",
-    "forte"
-  );
-
-  addEdge(
-    "RISK_DESALIGNEMENT",
-    "DECISION_ARBITRAGE",
-    "decisionne",
-    "arbitrage nécessaire",
-    "forte"
-  );
-
-  addEdge(
-    "DECISION_ARBITRAGE",
-    getNodeId("GPE", "LOD2", "BE"),
-    "impacte",
-    "retour vers définition",
-    "forte"
-  );
-
-  addEdge(
-    "DECISION_ARBITRAGE",
-    getNodeId("GPE", "LOD2", "BM"),
-    "impacte",
-    "retour vers gamme",
-    "forte"
-  );
-
-  addEdge(
-    getNodeId("PIECE", "LOD3", "SIM"),
-    "PROOF_MATURITY",
-    "justifie",
-    "rapport simulation",
-    "moyenne"
-  );
-
-  addEdge(
-    getNodeId("HP", "LOD3", "BM"),
-    "PROOF_MATURITY",
-    "justifie",
-    "gamme validée",
-    "moyenne"
-  );
-
-  addEdge(
-    getNodeId("GPE", "LOD3", "CND"),
-    "PROOF_MATURITY",
-    "justifie",
-    "PV contrôle",
-    "moyenne"
-  );
-
-  addEdge(
-    "PROOF_MATURITY",
-    "PROCESS_GLOBAL",
-    "valide",
-    "preuve de maturité globale",
-    "forte"
-  );
-
-  return { nodes, edges };
-}
-
-function nodeRadius(node: GraphNode) {
-  if (node.category === "process") return 52;
-  if (node.category === "pillar_hub") return 42;
-  if (node.category === "gate") return 38;
-
-  if (
-    node.category === "risk" ||
-    node.category === "decision" ||
-    node.category === "proof"
-  ) {
-    return 40;
-  }
-
-  return 31;
-}
-
-function nodeFill(node: GraphNode) {
-  if (node.category === "pillar_hub" && node.pillar) {
-    return PILLAR_COLORS[node.pillar];
-  }
-
-  if (node.category === "gate") return "#e5e7eb";
-  if (node.category === "risk") return "#ef4444";
-  if (node.category === "decision") return "#facc15";
-  if (node.category === "proof") return "#a78bfa";
-
-  return ENTITY_COLORS[node.entity];
+  return bubbles;
 }
 
 export default function ViewerPage() {
-  const { nodes, edges } = useMemo(() => buildGraph(), []);
-
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const draggingNodeIdRef = useRef<string | null>(null);
-  const dragOffsetRef = useRef<NodePosition>({ x: 0, y: 0 });
-  const positionsLoadedRef = useRef(false);
+  const draggingBubbleIdRef = useRef<string | null>(null);
+  const dragOffsetRef = useRef<Position>({ x: 0, y: 0 });
+  const storageLoadedRef = useRef(false);
 
-  const [customPositions, setCustomPositions] = useState<
-    Record<string, NodePosition>
+  const defaultBubbles = useMemo(() => buildDefaultBubbles(), []);
+
+  const [customBubbles, setCustomBubbles] = useState<Bubble[]>([]);
+  const [bubbleOverrides, setBubbleOverrides] = useState<
+    Record<string, BubbleOverride>
   >({});
-  const [placementMode, setPlacementMode] = useState(false);
 
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("PROCESS_GLOBAL");
+  const [selectedBubbleId, setSelectedBubbleId] = useState<string>("PIECE_LOD1_BE");
+
+  const [moveEnabled, setMoveEnabled] = useState(true);
+  const [search, setSearch] = useState("");
+  const [familyFilter, setFamilyFilter] = useState<BubbleFamily | "ALL">("ALL");
   const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
   const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
-  const [entityFilter, setEntityFilter] = useState<Entity | "ALL">("ALL");
-  const [toolFilter, setToolFilter] = useState<ToolName | "ALL">("ALL");
-  const [simulationJobFilter, setSimulationJobFilter] = useState<
-    SimulationJob | "ALL"
-  >("ALL");
-  const [relationFilter, setRelationFilter] = useState<RelationType | "ALL">(
-    "ALL"
-  );
-  const [viewMode, setViewMode] = useState<
-    "global" | "piliers" | "lod" | "fonctions" | "risques"
-  >("global");
-  const [search, setSearch] = useState("");
+
+  const [newBubbleFamily, setNewBubbleFamily] = useState<BubbleFamily>("METIER");
+  const [newBubbleValue, setNewBubbleValue] = useState<string>("BE");
 
   useEffect(() => {
     try {
-      const raw = window.localStorage.getItem(LS_NODE_POSITIONS);
+      const rawOverrides = window.localStorage.getItem(LS_BUBBLE_OVERRIDES);
+      const rawCustomBubbles = window.localStorage.getItem(LS_CUSTOM_BUBBLES);
 
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, NodePosition>;
-        setCustomPositions(parsed);
+      if (rawOverrides) {
+        setBubbleOverrides(JSON.parse(rawOverrides) as Record<string, BubbleOverride>);
+      }
+
+      if (rawCustomBubbles) {
+        setCustomBubbles(JSON.parse(rawCustomBubbles) as Bubble[]);
       }
     } catch {
-      setCustomPositions({});
+      setBubbleOverrides({});
+      setCustomBubbles([]);
     } finally {
-      positionsLoadedRef.current = true;
+      storageLoadedRef.current = true;
     }
   }, []);
 
   useEffect(() => {
-    if (!positionsLoadedRef.current) return;
+    if (!storageLoadedRef.current) return;
 
     window.localStorage.setItem(
-      LS_NODE_POSITIONS,
-      JSON.stringify(customPositions)
+      LS_BUBBLE_OVERRIDES,
+      JSON.stringify(bubbleOverrides)
     );
-  }, [customPositions]);
+  }, [bubbleOverrides]);
 
-  const positionedNodes = useMemo(() => {
-    return nodes.map((node) => {
-      const customPosition = customPositions[node.id];
+  useEffect(() => {
+    if (!storageLoadedRef.current) return;
 
-      if (!customPosition) return node;
+    window.localStorage.setItem(
+      LS_CUSTOM_BUBBLES,
+      JSON.stringify(customBubbles)
+    );
+  }, [customBubbles]);
+
+  useEffect(() => {
+    const firstOption = getOptionsForFamily(newBubbleFamily)[0];
+
+    if (firstOption) {
+      setNewBubbleValue(firstOption.value);
+    }
+  }, [newBubbleFamily]);
+
+  const allBaseBubbles = useMemo(() => {
+    return [...defaultBubbles, ...customBubbles];
+  }, [defaultBubbles, customBubbles]);
+
+  const bubbles = useMemo(() => {
+    return allBaseBubbles.map((bubble) => {
+      const override = bubbleOverrides[bubble.id];
 
       return {
-        ...node,
-        x: customPosition.x,
-        y: customPosition.y,
+        ...bubble,
+        x: override?.x ?? bubble.x,
+        y: override?.y ?? bubble.y,
+        visible: override?.visible ?? bubble.visibleDefault,
       };
     });
-  }, [nodes, customPositions]);
+  }, [allBaseBubbles, bubbleOverrides]);
 
-  const nodeById = useMemo(() => {
-    return new Map(positionedNodes.map((node) => [node.id, node]));
-  }, [positionedNodes]);
+  const selectedBubble = useMemo(() => {
+    return bubbles.find((bubble) => bubble.id === selectedBubbleId);
+  }, [bubbles, selectedBubbleId]);
 
-  const selectedNode = nodeById.get(selectedNodeId);
+  const filteredBubbles = useMemo(() => {
+    const searchValue = search.toLowerCase().trim();
 
-  function getSvgPoint(event: React.PointerEvent<SVGElement>): NodePosition {
+    return bubbles.filter((bubble) => {
+      const matchSearch =
+        searchValue.length === 0 ||
+        bubble.label.toLowerCase().includes(searchValue) ||
+        bubble.subtitle.toLowerCase().includes(searchValue) ||
+        bubble.description.toLowerCase().includes(searchValue) ||
+        bubble.family.toLowerCase().includes(searchValue);
+
+      const matchFamily = familyFilter === "ALL" || bubble.family === familyFilter;
+
+      const matchPillar =
+        pillarFilter === "ALL" || bubble.pillar === pillarFilter || !bubble.pillar;
+
+      const matchLOD = lodFilter === "ALL" || bubble.lod === lodFilter || !bubble.lod;
+
+      return matchSearch && matchFamily && matchPillar && matchLOD;
+    });
+  }, [bubbles, search, familyFilter, pillarFilter, lodFilter]);
+
+  const visibleBubbles = useMemo(() => {
+    return filteredBubbles.filter((bubble) => bubble.visible);
+  }, [filteredBubbles]);
+
+  function getSvgPoint(event: ReactPointerEvent<SVGElement>): Position {
     const svg = svgRef.current;
 
     if (!svg) {
@@ -1286,294 +429,188 @@ export default function ViewerPage() {
     };
   }
 
-  function startDragNode(
-    event: React.PointerEvent<SVGGElement>,
-    node: GraphNode
+  function startDragBubble(
+    event: ReactPointerEvent<SVGGElement>,
+    bubble: Bubble & { visible: boolean }
   ) {
-    setSelectedNodeId(node.id);
+    setSelectedBubbleId(bubble.id);
 
-    if (!placementMode) return;
+    if (!moveEnabled) return;
 
     event.preventDefault();
     event.stopPropagation();
 
     const point = getSvgPoint(event);
 
-    draggingNodeIdRef.current = node.id;
+    draggingBubbleIdRef.current = bubble.id;
     dragOffsetRef.current = {
-      x: point.x - node.x,
-      y: point.y - node.y,
+      x: point.x - bubble.x,
+      y: point.y - bubble.y,
     };
 
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function moveDraggedNode(event: React.PointerEvent<SVGSVGElement>) {
-    const draggingNodeId = draggingNodeIdRef.current;
+  function moveDraggedBubble(event: ReactPointerEvent<SVGSVGElement>) {
+    const draggingBubbleId = draggingBubbleIdRef.current;
 
-    if (!placementMode || !draggingNodeId) return;
+    if (!draggingBubbleId || !moveEnabled) return;
 
     const point = getSvgPoint(event);
-    const nextX = clamp(point.x - dragOffsetRef.current.x, 40, WIDTH - 40);
-    const nextY = clamp(point.y - dragOffsetRef.current.y, 40, HEIGHT - 40);
 
-    setCustomPositions((previous) => ({
+    const nextX = clamp(point.x - dragOffsetRef.current.x, 35, WIDTH - 35);
+    const nextY = clamp(point.y - dragOffsetRef.current.y, 35, HEIGHT - 35);
+
+    setBubbleOverrides((previous) => ({
       ...previous,
-      [draggingNodeId]: {
+      [draggingBubbleId]: {
+        ...previous[draggingBubbleId],
         x: nextX,
         y: nextY,
       },
     }));
   }
 
-  function stopDraggingNode() {
-    draggingNodeIdRef.current = null;
+  function stopDraggingBubble() {
+    draggingBubbleIdRef.current = null;
   }
 
-  function resetNodePositions() {
-    setCustomPositions({});
-    window.localStorage.removeItem(LS_NODE_POSITIONS);
-    setSelectedNodeId("PROCESS_GLOBAL");
+  function setBubbleVisible(bubbleId: string, visible: boolean) {
+    setBubbleOverrides((previous) => ({
+      ...previous,
+      [bubbleId]: {
+        ...previous[bubbleId],
+        visible,
+      },
+    }));
   }
 
-  const visibleNodeIds = useMemo(() => {
-    const ids = new Set<string>();
+  function showFilteredBubbles() {
+    setBubbleOverrides((previous) => {
+      const next = { ...previous };
 
-    for (const node of positionedNodes) {
-      const searchValue = search.toLowerCase().trim();
-
-      const matchSearch =
-        searchValue.length === 0 ||
-        node.label.toLowerCase().includes(searchValue) ||
-        node.subtitle.toLowerCase().includes(searchValue) ||
-        node.description.toLowerCase().includes(searchValue) ||
-        node.functions.some(
-          (item) =>
-            item.title.toLowerCase().includes(searchValue) ||
-            item.detail.toLowerCase().includes(searchValue)
-        ) ||
-        Boolean(
-          node.tools?.some((tool) =>
-            TOOL_LABELS[tool].toLowerCase().includes(searchValue)
-          )
-        ) ||
-        Boolean(
-          node.simulationJobs?.some((job) =>
-            SIMULATION_JOB_LABELS[job].toLowerCase().includes(searchValue)
-          )
-        );
-
-      const matchPillar =
-        pillarFilter === "ALL" ||
-        node.pillar === pillarFilter ||
-        node.category === "process" ||
-        node.category === "gate" ||
-        node.category === "risk" ||
-        node.category === "decision" ||
-        node.category === "proof";
-
-      const matchLOD =
-        lodFilter === "ALL" ||
-        node.lod === lodFilter ||
-        node.category === "process" ||
-        (node.category === "pillar_hub" && !node.lod) ||
-        node.category === "risk" ||
-        node.category === "decision" ||
-        node.category === "proof";
-
-      const matchEntity =
-        entityFilter === "ALL" ||
-        node.entity === entityFilter ||
-        node.entity === "TRANSVERSE";
-
-      const matchTool =
-        toolFilter === "ALL" ||
-        Boolean(node.tools?.includes(toolFilter)) ||
-        node.category === "process" ||
-        node.category === "pillar_hub" ||
-        node.category === "gate" ||
-        node.category === "risk" ||
-        node.category === "decision" ||
-        node.category === "proof";
-
-      const matchSimulationJob =
-        simulationJobFilter === "ALL" ||
-        Boolean(node.simulationJobs?.includes(simulationJobFilter)) ||
-        node.category === "process" ||
-        node.category === "pillar_hub" ||
-        node.category === "gate" ||
-        node.category === "risk" ||
-        node.category === "decision" ||
-        node.category === "proof";
-
-      let matchView = true;
-
-      if (viewMode === "piliers") {
-        matchView =
-          node.category === "process" ||
-          node.category === "pillar_hub" ||
-          node.category === "gate";
+      for (const bubble of filteredBubbles) {
+        next[bubble.id] = {
+          ...next[bubble.id],
+          visible: true,
+        };
       }
 
-      if (viewMode === "lod") {
-        matchView =
-          node.category === "process" ||
-          node.category === "gate" ||
-          Boolean(node.lod);
+      return next;
+    });
+  }
+
+  function hideFilteredBubbles() {
+    setBubbleOverrides((previous) => {
+      const next = { ...previous };
+
+      for (const bubble of filteredBubbles) {
+        next[bubble.id] = {
+          ...next[bubble.id],
+          visible: false,
+        };
       }
 
-      if (viewMode === "fonctions") {
-        matchView =
-          node.category === "process" ||
-          node.category === "pillar_hub" ||
-          node.category === "entity_function";
-      }
+      return next;
+    });
+  }
 
-      if (viewMode === "risques") {
-        matchView =
-          node.category === "risk" ||
-          node.category === "decision" ||
-          node.category === "proof" ||
-          node.status === "bloque" ||
-          node.id === "PROCESS_GLOBAL";
-      }
+  function addCustomBubble() {
+    const label = labelForFamilyValue(newBubbleFamily, newBubbleValue);
+    const color = colorForFamilyValue(newBubbleFamily, newBubbleValue);
+    const index = customBubbles.length;
+    const position = {
+      x: 1460,
+      y: 190 + (index % 12) * 48,
+    };
 
-      if (
-        matchSearch &&
-        matchPillar &&
-        matchLOD &&
-        matchEntity &&
-        matchTool &&
-        matchSimulationJob &&
-        matchView
-      ) {
-        ids.add(node.id);
-      }
+    const id = `CUSTOM_${Date.now()}_${Math.round(Math.random() * 100000)}`;
+
+    const bubble: Bubble = {
+      id,
+      label,
+      subtitle: subtitleForFamilyValue(newBubbleFamily),
+      family: newBubbleFamily,
+      x: position.x,
+      y: position.y,
+      color,
+      description: descriptionForFamilyValue(newBubbleFamily, newBubbleValue),
+      visibleDefault: true,
+      isCustom: true,
+    };
+
+    setCustomBubbles((previous) => [...previous, bubble]);
+    setSelectedBubbleId(id);
+  }
+
+  function deleteCustomBubble(bubbleId: string) {
+    setCustomBubbles((previous) => previous.filter((bubble) => bubble.id !== bubbleId));
+
+    setBubbleOverrides((previous) => {
+      const next = { ...previous };
+      delete next[bubbleId];
+      return next;
+    });
+
+    if (selectedBubbleId === bubbleId) {
+      setSelectedBubbleId("PIECE_LOD1_BE");
     }
+  }
 
-    if (viewMode === "risques") {
-      for (const edge of edges) {
-        if (ids.has(edge.source) || ids.has(edge.target)) {
-          ids.add(edge.source);
-          ids.add(edge.target);
+  function resetPositions() {
+    setBubbleOverrides((previous) => {
+      const next: Record<string, BubbleOverride> = {};
+
+      for (const [bubbleId, override] of Object.entries(previous)) {
+        if (override.visible !== undefined) {
+          next[bubbleId] = { visible: override.visible };
         }
       }
-    }
 
-    return ids;
-  }, [
-    positionedNodes,
-    edges,
-    search,
-    pillarFilter,
-    lodFilter,
-    entityFilter,
-    toolFilter,
-    simulationJobFilter,
-    viewMode,
-  ]);
-
-  const visibleEdges = useMemo(() => {
-    return edges.filter((edge) => {
-      const matchRelation =
-        relationFilter === "ALL" || edge.type === relationFilter;
-
-      return (
-        visibleNodeIds.has(edge.source) &&
-        visibleNodeIds.has(edge.target) &&
-        matchRelation
-      );
+      return next;
     });
-  }, [edges, visibleNodeIds, relationFilter]);
-
-  const connectedNodeIds = useMemo(() => {
-    const ids = new Set<string>();
-    ids.add(selectedNodeId);
-
-    for (const edge of edges) {
-      if (edge.source === selectedNodeId) ids.add(edge.target);
-      if (edge.target === selectedNodeId) ids.add(edge.source);
-    }
-
-    return ids;
-  }, [edges, selectedNodeId]);
-
-  const connectedEdges = useMemo(() => {
-    return edges.filter(
-      (edge) => edge.source === selectedNodeId || edge.target === selectedNodeId
-    );
-  }, [edges, selectedNodeId]);
-
-  const visibleNodes = positionedNodes.filter((node) =>
-    visibleNodeIds.has(node.id)
-  );
-
-  function nodeOpacity(node: GraphNode) {
-    if (placementMode) return 1;
-    if (!selectedNodeId) return 1;
-    if (connectedNodeIds.has(node.id)) return 1;
-    return 0.18;
   }
 
-  function edgeOpacity(edge: GraphEdge) {
-    if (placementMode) return 0.5;
-    if (!selectedNodeId) return 0.68;
-    if (edge.source === selectedNodeId || edge.target === selectedNodeId) return 1;
-
-    if (connectedNodeIds.has(edge.source) && connectedNodeIds.has(edge.target)) {
-      return 0.35;
-    }
-
-    return 0.08;
-  }
-
-  function resetFilters() {
+  function resetEverything() {
+    setBubbleOverrides({});
+    setCustomBubbles([]);
+    setSearch("");
+    setFamilyFilter("ALL");
     setPillarFilter("ALL");
     setLodFilter("ALL");
-    setEntityFilter("ALL");
-    setToolFilter("ALL");
-    setSimulationJobFilter("ALL");
-    setRelationFilter("ALL");
-    setViewMode("global");
-    setSearch("");
-    setSelectedNodeId("PROCESS_GLOBAL");
+    setSelectedBubbleId("PIECE_LOD1_BE");
+
+    window.localStorage.removeItem(LS_BUBBLE_OVERRIDES);
+    window.localStorage.removeItem(LS_CUSTOM_BUBBLES);
   }
+
+  const newBubbleOptions = getOptionsForFamily(newBubbleFamily);
 
   return (
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer réseau V0.2</p>
-          <h1>
-            Architecture Pièce / HP / GPE × LOD × Métiers × Outils × Simulation
-          </h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.3</p>
+          <h1>Placement libre des bulles dans Pièce / HP / GPE</h1>
         </div>
 
         <div className="toolbar">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Rechercher..."
+            placeholder="Rechercher une bulle..."
           />
 
           <select
-            value={viewMode}
+            value={familyFilter}
             onChange={(event) =>
-              setViewMode(
-                event.target.value as
-                  | "global"
-                  | "piliers"
-                  | "lod"
-                  | "fonctions"
-                  | "risques"
-              )
+              setFamilyFilter(event.target.value as BubbleFamily | "ALL")
             }
           >
-            <option value="global">Vue globale</option>
-            <option value="piliers">Vue piliers</option>
-            <option value="lod">Vue LOD</option>
-            <option value="fonctions">Vue fonctions</option>
-            <option value="risques">Vue risques / preuves</option>
+            <option value="ALL">Toutes bulles</option>
+            <option value="METIER">Métiers</option>
+            <option value="OUTIL">Outils</option>
+            <option value="SIMULATION">Métiers SIM</option>
           </select>
 
           <select
@@ -1598,116 +635,34 @@ export default function ViewerPage() {
             <option value="LOD3">LOD3</option>
           </select>
 
-          <select
-            value={entityFilter}
-            onChange={(event) =>
-              setEntityFilter(event.target.value as Entity | "ALL")
-            }
-          >
-            <option value="ALL">Tous métiers</option>
-            <option value="BE">BE</option>
-            <option value="BM">BM</option>
-            <option value="SIM">SIM</option>
-            <option value="FA">FA</option>
-            <option value="CND">CND</option>
-          </select>
-
-          <select
-            value={toolFilter}
-            onChange={(event) =>
-              setToolFilter(event.target.value as ToolName | "ALL")
-            }
-          >
-            <option value="ALL">Tous outils</option>
-            {TOOLS.map((tool) => (
-              <option key={tool} value={tool}>
-                {TOOL_LABELS[tool]}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={simulationJobFilter}
-            onChange={(event) =>
-              setSimulationJobFilter(
-                event.target.value as SimulationJob | "ALL"
-              )
-            }
-          >
-            <option value="ALL">Tous métiers SIM</option>
-            {SIMULATION_JOBS.map((job) => (
-              <option key={job} value={job}>
-                {SIMULATION_JOB_LABELS[job]}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={relationFilter}
-            onChange={(event) =>
-              setRelationFilter(event.target.value as RelationType | "ALL")
-            }
-          >
-            <option value="ALL">Toutes relations</option>
-            <option value="structure">structure</option>
-            <option value="synchronise">synchronise</option>
-            <option value="alimente">alimente</option>
-            <option value="impacte">impacte</option>
-            <option value="construit">construit</option>
-            <option value="valide">valide</option>
-            <option value="bloque">bloque</option>
-            <option value="justifie">justifie</option>
-            <option value="controle">controle</option>
-            <option value="industrialise">industrialise</option>
-            <option value="simule">simule</option>
-            <option value="decisionne">decisionne</option>
-          </select>
-
           <button
-            className={placementMode ? "activeButton" : ""}
-            onClick={() => setPlacementMode((current) => !current)}
+            className={moveEnabled ? "activeButton" : ""}
+            onClick={() => setMoveEnabled((current) => !current)}
           >
-            {placementMode ? "Placement actif" : "Mode placement"}
+            {moveEnabled ? "Déplacement actif" : "Déplacement verrouillé"}
           </button>
 
-          <button onClick={resetNodePositions}>Réinit. positions</button>
-          <button onClick={resetFilters}>Réinitialiser filtres</button>
+          <button onClick={showFilteredBubbles}>Afficher sélection</button>
+          <button onClick={hideFilteredBubbles}>Masquer sélection</button>
+          <button onClick={resetPositions}>Réinit. positions</button>
+          <button onClick={resetEverything}>Réinit. total</button>
         </div>
       </section>
-
-      {placementMode ? (
-        <div className="placementBanner">
-          Mode placement actif : clique sur une bulle et déplace-la. Les positions
-          sont sauvegardées automatiquement dans le navigateur.
-        </div>
-      ) : null}
 
       <section className="layout">
         <div className="graphCard">
           <svg
             ref={svgRef}
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
-            className={placementMode ? "graphSvg graphSvgPlacement" : "graphSvg"}
+            className={moveEnabled ? "graphSvg graphSvgMove" : "graphSvg"}
             role="img"
-            onPointerMove={moveDraggedNode}
-            onPointerUp={stopDraggingNode}
-            onPointerLeave={stopDraggingNode}
+            onPointerMove={moveDraggedBubble}
+            onPointerUp={stopDraggingBubble}
+            onPointerLeave={stopDraggingBubble}
           >
             <defs>
-              <marker
-                id="arrow"
-                markerWidth="10"
-                markerHeight="10"
-                refX="8"
-                refY="3"
-                orient="auto"
-                markerUnits="strokeWidth"
-              >
-                <path d="M0,0 L0,6 L9,3 z" fill="#cbd5e1" />
-              </marker>
-
-              <filter id="nodeGlow" x="-60%" y="-60%" width="220%" height="220%">
-                <feGaussianBlur stdDeviation="4" result="coloredBlur" />
+              <filter id="bubbleGlow" x="-60%" y="-80%" width="220%" height="260%">
+                <feGaussianBlur stdDeviation="3.8" result="coloredBlur" />
                 <feMerge>
                   <feMergeNode in="coloredBlur" />
                   <feMergeNode in="SourceGraphic" />
@@ -1715,124 +670,107 @@ export default function ViewerPage() {
               </filter>
             </defs>
 
-            {PILLARS.map((pillar) => (
-              <g key={`col_${pillar}`}>
-                <rect
-                  x={PILLAR_X[pillar] - 190}
-                  y={126}
-                  width={380}
-                  height={780}
-                  rx={30}
-                  className="pillarZone"
-                  stroke={PILLAR_COLORS[pillar]}
-                />
-                <text
-                  x={PILLAR_X[pillar]}
-                  y={148}
-                  textAnchor="middle"
-                  className="pillarTitle"
-                >
-                  {PILLAR_LABELS[pillar]}
-                </text>
-              </g>
-            ))}
-
-            {LODS.map((lod) => (
-              <g key={`row_${lod}`}>
-                <line
-                  x1={55}
-                  y1={LOD_Y[lod]}
-                  x2={1545}
-                  y2={LOD_Y[lod]}
-                  className="lodLine"
-                />
-                <text x={64} y={LOD_Y[lod] - 52} className="lodLabel">
-                  {LOD_LABELS[lod]}
-                </text>
-              </g>
-            ))}
-
-            {visibleEdges.map((edge) => {
-              const source = nodeById.get(edge.source);
-              const target = nodeById.get(edge.target);
-
-              if (!source || !target) return null;
-
-              const color = RELATION_COLORS[edge.type];
+            {PILLARS.map((pillar) => {
+              const frame = PILLAR_FRAMES[pillar];
 
               return (
-                <g key={edge.id} opacity={edgeOpacity(edge)}>
-                  <line
-                    x1={source.x}
-                    y1={source.y}
-                    x2={target.x}
-                    y2={target.y}
-                    stroke={color}
-                    strokeWidth={edge.criticality === "forte" ? 2.2 : 1.35}
-                    strokeDasharray={edge.bidirectional ? "5 6" : undefined}
-                    markerEnd={edge.bidirectional ? undefined : "url(#arrow)"}
+                <g key={pillar}>
+                  <rect
+                    x={frame.x}
+                    y={frame.y}
+                    width={frame.w}
+                    height={frame.h}
+                    rx={28}
+                    className="pillarFrame"
+                    stroke={PILLAR_COLORS[pillar]}
                   />
+
+                  <text
+                    x={frame.x + frame.w / 2}
+                    y={frame.y - 20}
+                    textAnchor="middle"
+                    className="pillarTitle"
+                  >
+                    {PILLAR_LABELS[pillar]}
+                  </text>
                 </g>
               );
             })}
 
-            {visibleNodes.map((node) => {
-              const radius = nodeRadius(node);
-              const selected = selectedNodeId === node.id;
-              const labelLines = wrapLabel(
-                node.label,
-                node.category === "entity_function" ? 8 : 16
+            {LODS.map((lod) => {
+              const row = LOD_ROWS[lod];
+
+              return (
+                <g key={lod}>
+                  <rect
+                    x={120}
+                    y={row.y}
+                    width={1350}
+                    height={row.h}
+                    rx={22}
+                    className="lodBand"
+                  />
+
+                  <line
+                    x1={145}
+                    y1={row.y}
+                    x2={1450}
+                    y2={row.y}
+                    className="lodSeparator"
+                  />
+
+                  <text x={55} y={row.y + 92} className="lodMainLabel">
+                    {LOD_LABELS[lod]}
+                  </text>
+
+                  <text x={55} y={row.y + 118} className="lodSubLabel">
+                    {LOD_DETAILS[lod]}
+                  </text>
+                </g>
               );
-              const customPositionActive = Boolean(customPositions[node.id]);
+            })}
+
+            {visibleBubbles.map((bubble) => {
+              const width = bubbleWidth(bubble.label);
+              const selected = selectedBubbleId === bubble.id;
+              const hasCustomPosition =
+                bubbleOverrides[bubble.id]?.x !== undefined ||
+                bubbleOverrides[bubble.id]?.y !== undefined;
 
               return (
                 <g
-                  key={node.id}
-                  transform={`translate(${node.x}, ${node.y})`}
-                  onPointerDown={(event) => startDragNode(event, node)}
-                  className={
-                    placementMode
-                      ? "nodeGroup nodeGroupPlacement"
-                      : "nodeGroup"
-                  }
-                  opacity={nodeOpacity(node)}
-                  filter={selected ? "url(#nodeGlow)" : undefined}
+                  key={bubble.id}
+                  transform={`translate(${bubble.x}, ${bubble.y})`}
+                  className={moveEnabled ? "bubbleGroup bubbleGroupMove" : "bubbleGroup"}
+                  onPointerDown={(event) => startDragBubble(event, bubble)}
+                  filter={selected ? "url(#bubbleGlow)" : undefined}
                 >
-                  <circle
-                    r={radius}
-                    fill={nodeFill(node)}
+                  <rect
+                    x={-width / 2}
+                    y={-18}
+                    width={width}
+                    height={36}
+                    rx={18}
+                    fill={bubble.color}
                     stroke={
-                      selected
-                        ? "#ffffff"
-                        : customPositionActive
-                          ? "#facc15"
-                          : STATUS_COLORS[node.status]
+                      selected ? "#ffffff" : hasCustomPosition ? "#facc15" : "rgba(255,255,255,0.28)"
                     }
-                    strokeWidth={selected ? 4 : customPositionActive ? 3.5 : 3}
+                    strokeWidth={selected ? 3.2 : hasCustomPosition ? 2.6 : 1.6}
                   />
 
                   <circle
-                    r={radius - 7}
-                    fill="transparent"
-                    stroke="rgba(15,23,42,0.55)"
-                    strokeWidth="6"
-                    strokeDasharray={`${Math.max(node.maturity, 1)} ${
-                      100 - Math.max(node.maturity, 1)
-                    }`}
-                    pathLength="100"
-                    transform="rotate(-90)"
+                    cx={-width / 2 + 18}
+                    cy={0}
+                    r={5.5}
+                    fill="rgba(15,23,42,0.72)"
                   />
 
-                  <text className="nodeText" textAnchor="middle">
-                    {labelLines.map((line, index) => (
-                      <tspan
-                        key={`${node.id}_${index}`}
-                        x="0"
-                        y={(index - (labelLines.length - 1) / 2) * 12}
-                      >
-                        {line}
-                      </tspan>
-                    ))}
+                  <text
+                    x={-width / 2 + 32}
+                    y={4.5}
+                    className="bubbleText"
+                  >
+                    {bubble.label}
                   </text>
                 </g>
               );
@@ -1842,188 +780,165 @@ export default function ViewerPage() {
 
         <aside className="sidePanel">
           <div className="panelBlock">
-            <p className="panelLabel">Nœud sélectionné</p>
+            <p className="panelLabel">Bulle sélectionnée</p>
 
-            {selectedNode ? (
+            {selectedBubble ? (
               <>
                 <div className="selectedHeader">
                   <span
                     className="dot"
-                    style={{ background: nodeFill(selectedNode) }}
+                    style={{ background: selectedBubble.color }}
                   />
                   <div>
-                    <h2>{selectedNode.label}</h2>
+                    <h2>{selectedBubble.label}</h2>
                     <p>
-                      {selectedNode.subtitle}
-                      {selectedNode.pillar
-                        ? ` · ${PILLAR_LABELS[selectedNode.pillar]}`
+                      {selectedBubble.subtitle} · {selectedBubble.family}
+                      {selectedBubble.pillar
+                        ? ` · ${PILLAR_LABELS[selectedBubble.pillar]}`
                         : ""}
-                      {selectedNode.lod ? ` · ${selectedNode.lod}` : ""}
-                      {selectedNode.entity !== "TRANSVERSE"
-                        ? ` · ${ENTITY_LABELS[selectedNode.entity]}`
-                        : ""}
+                      {selectedBubble.lod ? ` · ${selectedBubble.lod}` : ""}
                     </p>
                   </div>
                 </div>
 
-                <p className="description">{selectedNode.description}</p>
-
-                <div className="metricGrid">
-                  <div>
-                    <span>Maturité</span>
-                    <strong>{selectedNode.maturity}%</strong>
-                  </div>
-                  <div>
-                    <span>Statut</span>
-                    <strong>{selectedNode.status}</strong>
-                  </div>
-                </div>
+                <p className="description">{selectedBubble.description}</p>
 
                 <div className="positionGrid">
                   <div>
                     <span>Position X</span>
-                    <strong>{Math.round(selectedNode.x)}</strong>
+                    <strong>{Math.round(selectedBubble.x)}</strong>
                   </div>
                   <div>
                     <span>Position Y</span>
-                    <strong>{Math.round(selectedNode.y)}</strong>
+                    <strong>{Math.round(selectedBubble.y)}</strong>
                   </div>
                 </div>
 
-                <div className="progressTrack">
-                  <div
-                    className="progressFill"
-                    style={{
-                      width: `${selectedNode.maturity}%`,
-                      background: STATUS_COLORS[selectedNode.status],
-                    }}
-                  />
+                <div className="selectedActions">
+                  <button onClick={() => setBubbleVisible(selectedBubble.id, true)}>
+                    Afficher
+                  </button>
+                  <button onClick={() => setBubbleVisible(selectedBubble.id, false)}>
+                    Masquer
+                  </button>
+
+                  {selectedBubble.isCustom ? (
+                    <button
+                      className="dangerButton"
+                      onClick={() => deleteCustomBubble(selectedBubble.id)}
+                    >
+                      Supprimer
+                    </button>
+                  ) : null}
                 </div>
               </>
             ) : (
-              <p>Aucun nœud sélectionné.</p>
+              <p className="empty">Aucune bulle sélectionnée.</p>
             )}
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Fonctions métier</p>
+            <p className="panelLabel">Ajouter une bulle libre</p>
 
-            {selectedNode?.functions?.length ? (
-              <div className="functionList">
-                {selectedNode.functions.map((item, index) => (
-                  <div
-                    key={`${selectedNode.id}_function_${index}`}
-                    className="functionItem"
-                  >
-                    <strong>{item.title}</strong>
-                    <p>{item.detail}</p>
-                  </div>
+            <div className="addBubbleGrid">
+              <select
+                value={newBubbleFamily}
+                onChange={(event) =>
+                  setNewBubbleFamily(event.target.value as BubbleFamily)
+                }
+              >
+                <option value="METIER">Métier</option>
+                <option value="OUTIL">Outil</option>
+                <option value="SIMULATION">Métier SIM</option>
+              </select>
+
+              <select
+                value={newBubbleValue}
+                onChange={(event) => setNewBubbleValue(event.target.value)}
+              >
+                {newBubbleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
                 ))}
-              </div>
-            ) : (
-              <p className="empty">Aucune fonction associée.</p>
-            )}
+              </select>
+
+              <button onClick={addCustomBubble}>Ajouter</button>
+            </div>
+
+            <p className="hint">
+              Les bulles ajoutées sont indépendantes. Tu peux donc ajouter plusieurs
+              fois CATIA, BE, ANSA, Inj_c, etc.
+            </p>
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Outils utilisés</p>
+            <p className="panelLabel">Bibliothèque des bulles</p>
 
-            {selectedNode?.tools?.length ? (
-              <div className="toolList">
-                {selectedNode.tools.map((tool) => (
-                  <span key={`${selectedNode.id}_${tool}`} className="toolChip">
-                    {TOOL_LABELS[tool]}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="empty">Aucun outil directement associé à ce nœud.</p>
-            )}
-          </div>
-
-          <div className="panelBlock">
-            <p className="panelLabel">Métiers simulation</p>
-
-            {selectedNode?.simulationJobs?.length ? (
-              <div className="simulationJobList">
-                {selectedNode.simulationJobs.map((job) => (
-                  <span
-                    key={`${selectedNode.id}_${job}`}
-                    className="simulationJobChip"
-                  >
-                    {SIMULATION_JOB_LABELS[job]}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="empty">
-                Aucun métier simulation directement associé à ce nœud.
-              </p>
-            )}
-          </div>
-
-          <div className="panelBlock">
-            <p className="panelLabel">Relations directes</p>
-
-            <div className="edgeList">
-              {connectedEdges.length === 0 ? (
-                <p className="empty">Aucune relation directe.</p>
+            <div className="bubbleList">
+              {filteredBubbles.length === 0 ? (
+                <p className="empty">Aucune bulle ne correspond aux filtres.</p>
               ) : (
-                connectedEdges.map((edge) => {
-                  const source = nodeById.get(edge.source);
-                  const target = nodeById.get(edge.target);
-
-                  return (
+                filteredBubbles.map((bubble) => (
+                  <div
+                    key={bubble.id}
+                    className={
+                      bubble.id === selectedBubbleId
+                        ? "bubbleListItem bubbleListItemSelected"
+                        : "bubbleListItem"
+                    }
+                  >
                     <button
-                      key={edge.id}
-                      className="edgeItem"
-                      onClick={() =>
-                        setSelectedNodeId(
-                          edge.source === selectedNodeId
-                            ? edge.target
-                            : edge.source
-                        )
-                      }
+                      className="bubbleListMain"
+                      onClick={() => setSelectedBubbleId(bubble.id)}
                     >
                       <span
-                        className="relationColor"
-                        style={{ background: RELATION_COLORS[edge.type] }}
+                        className="bubbleListDot"
+                        style={{ background: bubble.color }}
                       />
                       <span>
-                        <strong>{edge.type}</strong>
-                        <small>
-                          {source?.label} → {target?.label}
-                        </small>
-                        <em>{edge.label}</em>
+                        <strong>{bubble.label}</strong>
+                        <small>{bubble.subtitle}</small>
                       </span>
                     </button>
-                  );
-                })
+
+                    <label className="visibilityToggle">
+                      <input
+                        type="checkbox"
+                        checked={bubble.visible}
+                        onChange={(event) =>
+                          setBubbleVisible(bubble.id, event.target.checked)
+                        }
+                      />
+                      <span>{bubble.visible ? "Visible" : "Masquée"}</span>
+                    </label>
+                  </div>
+                ))
               )}
             </div>
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.2</p>
+            <p className="panelLabel">Lecture V0.3</p>
 
             <ul className="readingList">
               <li>
-                <strong>Colonnes</strong> : les 3 piliers Pièce, HP et GPE.
+                <strong>Cadres fixes</strong> : Pièce, HP et GPE.
               </li>
               <li>
-                <strong>Lignes</strong> : LOD1, LOD2 et LOD3.
+                <strong>Repères fixes</strong> : LOD1, LOD2, LOD3 sur la gauche.
               </li>
               <li>
-                <strong>Bulles métier</strong> : BE, BM, SIM, FA et CND.
+                <strong>Bulles libres</strong> : métiers, outils et métiers simulation.
               </li>
               <li>
-                <strong>Mode placement</strong> : déplacement libre des bulles.
+                <strong>Affichage libre</strong> : chaque bulle peut être visible ou masquée.
               </li>
               <li>
-                <strong>Sauvegarde</strong> : positions conservées dans le navigateur.
+                <strong>Placement libre</strong> : chaque bulle peut être déplacée où tu veux.
               </li>
               <li>
-                <strong>Contour jaune</strong> : position personnalisée.
+                <strong>Contour jaune</strong> : bulle repositionnée manuellement.
               </li>
             </ul>
           </div>
@@ -2079,12 +994,15 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 1260px;
+          max-width: 1220px;
         }
 
         .toolbar input,
         .toolbar select,
-        .toolbar button {
+        .toolbar button,
+        .addBubbleGrid select,
+        .addBubbleGrid button,
+        .selectedActions button {
           border: 1px solid rgba(148, 163, 184, 0.28);
           background: rgba(15, 23, 42, 0.84);
           color: #e5e7eb;
@@ -2095,10 +1013,12 @@ export default function ViewerPage() {
         }
 
         .toolbar input {
-          width: 180px;
+          width: 210px;
         }
 
-        .toolbar button {
+        .toolbar button,
+        .addBubbleGrid button,
+        .selectedActions button {
           cursor: pointer;
           font-weight: 800;
           background: rgba(37, 99, 235, 0.34);
@@ -2110,20 +1030,9 @@ export default function ViewerPage() {
           color: #fef9c3;
         }
 
-        .placementBanner {
-          border: 1px solid rgba(250, 204, 21, 0.38);
-          background: rgba(113, 63, 18, 0.32);
-          color: #fef3c7;
-          padding: 11px 14px;
-          border-radius: 16px;
-          margin-bottom: 14px;
-          font-size: 13px;
-          font-weight: 700;
-        }
-
         .layout {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 390px;
+          grid-template-columns: minmax(0, 1fr) 410px;
           gap: 18px;
           align-items: stretch;
         }
@@ -2149,55 +1058,67 @@ export default function ViewerPage() {
           touch-action: none;
         }
 
-        .graphSvgPlacement {
+        .graphSvgMove {
           cursor: grab;
         }
 
-        .pillarZone {
-          fill: rgba(15, 23, 42, 0.2);
-          stroke-width: 1.5;
-          stroke-opacity: 0.32;
-          stroke-dasharray: 8 8;
+        .pillarFrame {
+          fill: rgba(15, 23, 42, 0.22);
+          stroke-width: 1.8;
+          stroke-opacity: 0.48;
+          stroke-dasharray: 10 8;
         }
 
         .pillarTitle {
-          fill: rgba(248, 250, 252, 0.82);
-          font-size: 18px;
-          font-weight: 850;
-          letter-spacing: 0.04em;
+          fill: rgba(248, 250, 252, 0.88);
+          font-size: 21px;
+          font-weight: 900;
+          letter-spacing: 0.05em;
         }
 
-        .lodLine {
-          stroke: rgba(203, 213, 225, 0.1);
+        .lodBand {
+          fill: rgba(15, 23, 42, 0.16);
+          stroke: rgba(148, 163, 184, 0.08);
+          stroke-width: 1;
+        }
+
+        .lodSeparator {
+          stroke: rgba(226, 232, 240, 0.1);
           stroke-width: 1.2;
           stroke-dasharray: 8 10;
         }
 
-        .lodLabel {
-          fill: rgba(226, 232, 240, 0.56);
+        .lodMainLabel {
+          fill: #f8fafc;
+          font-size: 22px;
+          font-weight: 900;
+        }
+
+        .lodSubLabel {
+          fill: #94a3b8;
           font-size: 13px;
-          font-weight: 800;
+          font-weight: 700;
         }
 
-        .nodeGroup {
+        .bubbleGroup {
           cursor: pointer;
-          transition: opacity 0.2s ease;
+          transition: opacity 0.16s ease;
         }
 
-        .nodeGroupPlacement {
+        .bubbleGroupMove {
           cursor: grab;
         }
 
-        .nodeGroupPlacement:active {
+        .bubbleGroupMove:active {
           cursor: grabbing;
         }
 
-        .nodeText {
-          pointer-events: none;
+        .bubbleText {
           fill: #020617;
-          font-size: 10px;
+          font-size: 12px;
           font-weight: 900;
-          letter-spacing: -0.02em;
+          pointer-events: none;
+          letter-spacing: -0.01em;
         }
 
         .sidePanel {
@@ -2258,7 +1179,6 @@ export default function ViewerPage() {
           margin: 0 0 14px 0;
         }
 
-        .metricGrid,
         .positionGrid {
           display: grid;
           grid-template-columns: 1fr 1fr;
@@ -2266,7 +1186,6 @@ export default function ViewerPage() {
           margin-bottom: 10px;
         }
 
-        .metricGrid div,
         .positionGrid div {
           border: 1px solid rgba(148, 163, 184, 0.16);
           border-radius: 14px;
@@ -2274,7 +1193,6 @@ export default function ViewerPage() {
           background: rgba(2, 6, 23, 0.45);
         }
 
-        .metricGrid span,
         .positionGrid span {
           display: block;
           color: #94a3b8;
@@ -2282,138 +1200,102 @@ export default function ViewerPage() {
           margin-bottom: 4px;
         }
 
-        .metricGrid strong,
         .positionGrid strong {
           font-size: 15px;
           color: #f8fafc;
         }
 
-        .progressTrack {
-          height: 8px;
-          border-radius: 999px;
-          background: rgba(148, 163, 184, 0.14);
-          overflow: hidden;
-        }
-
-        .progressFill {
-          height: 100%;
-          border-radius: 999px;
-        }
-
-        .functionList {
-          display: flex;
-          flex-direction: column;
-          gap: 9px;
-          max-height: 245px;
-          overflow: auto;
-          padding-right: 4px;
-        }
-
-        .functionItem {
-          border: 1px solid rgba(148, 163, 184, 0.15);
-          background: rgba(2, 6, 23, 0.42);
-          border-radius: 14px;
-          padding: 10px;
-        }
-
-        .functionItem strong {
-          display: block;
-          color: #f8fafc;
-          font-size: 13px;
-          margin-bottom: 4px;
-        }
-
-        .functionItem p {
-          margin: 0;
-          color: #cbd5e1;
-          font-size: 12.5px;
-          line-height: 1.45;
-        }
-
-        .toolList,
-        .simulationJobList {
+        .selectedActions {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
         }
 
-        .toolChip {
-          display: inline-flex;
-          align-items: center;
-          border: 1px solid rgba(147, 197, 253, 0.32);
-          background: rgba(30, 64, 175, 0.22);
-          color: #dbeafe;
-          border-radius: 999px;
-          padding: 7px 10px;
-          font-size: 12px;
-          font-weight: 750;
+        .selectedActions .dangerButton {
+          background: rgba(220, 38, 38, 0.32);
+          border-color: rgba(248, 113, 113, 0.42);
         }
 
-        .simulationJobChip {
-          display: inline-flex;
-          align-items: center;
-          border: 1px solid rgba(167, 139, 250, 0.38);
-          background: rgba(88, 28, 135, 0.26);
-          color: #ede9fe;
-          border-radius: 999px;
-          padding: 7px 10px;
-          font-size: 12px;
-          font-weight: 750;
+        .addBubbleGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr auto;
+          gap: 8px;
         }
 
-        .edgeList {
+        .hint {
+          color: #94a3b8;
+          margin: 10px 0 0 0;
+          font-size: 12.5px;
+          line-height: 1.45;
+        }
+
+        .bubbleList {
           display: flex;
           flex-direction: column;
           gap: 8px;
-          max-height: 265px;
+          max-height: 340px;
           overflow: auto;
           padding-right: 4px;
         }
 
-        .edgeItem {
-          width: 100%;
+        .bubbleListItem {
           display: grid;
-          grid-template-columns: 9px 1fr;
-          gap: 10px;
+          grid-template-columns: 1fr auto;
+          gap: 8px;
+          align-items: center;
           border: 1px solid rgba(148, 163, 184, 0.16);
           background: rgba(2, 6, 23, 0.42);
-          color: #e5e7eb;
           border-radius: 14px;
-          padding: 10px;
+          padding: 9px;
+        }
+
+        .bubbleListItemSelected {
+          border-color: rgba(250, 204, 21, 0.55);
+          background: rgba(113, 63, 18, 0.22);
+        }
+
+        .bubbleListMain {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          border: 0;
+          background: transparent;
+          color: #e5e7eb;
+          padding: 0;
           text-align: left;
           cursor: pointer;
         }
 
-        .edgeItem:hover {
-          border-color: rgba(147, 197, 253, 0.45);
-          background: rgba(30, 41, 59, 0.62);
-        }
-
-        .relationColor {
-          width: 9px;
-          height: 100%;
-          min-height: 46px;
+        .bubbleListDot {
+          width: 12px;
+          height: 12px;
           border-radius: 999px;
+          flex: 0 0 auto;
         }
 
-        .edgeItem strong {
+        .bubbleListMain strong {
           display: block;
           font-size: 13px;
-          margin-bottom: 3px;
+          color: #f8fafc;
         }
 
-        .edgeItem small {
+        .bubbleListMain small {
           display: block;
           color: #94a3b8;
-          line-height: 1.35;
+          font-size: 12px;
         }
 
-        .edgeItem em {
-          display: block;
+        .visibilityToggle {
+          display: flex;
+          align-items: center;
+          gap: 6px;
           color: #cbd5e1;
-          font-style: normal;
-          margin-top: 5px;
           font-size: 12px;
+          white-space: nowrap;
+        }
+
+        .visibilityToggle input {
+          accent-color: #38bdf8;
         }
 
         .empty {
@@ -2444,6 +1326,10 @@ export default function ViewerPage() {
           }
 
           .layout {
+            grid-template-columns: 1fr;
+          }
+
+          .addBubbleGrid {
             grid-template-columns: 1fr;
           }
         }
