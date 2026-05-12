@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Pillar = "PIECE" | "HP" | "GPE";
 type LOD = "LOD1" | "LOD2" | "LOD3";
@@ -58,6 +58,11 @@ type FunctionItem = {
   detail: string;
 };
 
+type NodePosition = {
+  x: number;
+  y: number;
+};
+
 type GraphNode = {
   id: string;
   label: string;
@@ -88,6 +93,8 @@ type GraphEdge = {
 
 const WIDTH = 1600;
 const HEIGHT = 980;
+
+const LS_NODE_POSITIONS = "plm_viewer_v01_custom_node_positions";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -225,6 +232,10 @@ const ENTITY_OFFSETS: Record<
   CND: { dx: 74, dy: 68 },
 };
 
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
 function wrapLabel(label: string, maxLength = 15) {
   const words = label.split(" ");
   const lines: string[] = [];
@@ -360,8 +371,7 @@ function functionsFor(
       LOD3: [
         {
           title: "Figer la gamme détaillée",
-          detail:
-            "Fiches méthodes, paramètres process, outillages validés.",
+          detail: "Fiches méthodes, paramètres process, outillages validés.",
         },
         {
           title: "Préparer l’exécution FA",
@@ -404,8 +414,7 @@ function functionsFor(
         },
         {
           title: "Identifier les zones sensibles",
-          detail:
-            "Zones critiques à partager avec BE, BM, FA et CND.",
+          detail: "Zones critiques à partager avec BE, BM, FA et CND.",
         },
       ],
       LOD3: [
@@ -416,13 +425,11 @@ function functionsFor(
         },
         {
           title: "Justifier la définition",
-          detail:
-            "Lien entre résultats simulation, CAO libérée et décision RdC.",
+          detail: "Lien entre résultats simulation, CAO libérée et décision RdC.",
         },
         {
           title: "Appuyer la preuve numérique",
-          detail:
-            "Élément de preuve exploitable dans la validation produit.",
+          detail: "Élément de preuve exploitable dans la validation produit.",
         },
       ],
     },
@@ -445,8 +452,7 @@ function functionsFor(
       LOD2: [
         {
           title: "Tester la faisabilité atelier",
-          detail:
-            "Séquences de fabrication, accès, montage, moyens réels.",
+          detail: "Séquences de fabrication, accès, montage, moyens réels.",
         },
         {
           title: "Contribuer au choix process",
@@ -454,25 +460,21 @@ function functionsFor(
         },
         {
           title: "Qualifier les risques d’exécution",
-          detail:
-            "Points bloquants ou sensibles avant passage en LOD3.",
+          detail: "Points bloquants ou sensibles avant passage en LOD3.",
         },
       ],
       LOD3: [
         {
           title: "Exécuter le dossier fabrication",
-          detail:
-            "Instructions atelier, moyens, temps, contrôle exécution.",
+          detail: "Instructions atelier, moyens, temps, contrôle exécution.",
         },
         {
           title: "Tracer les écarts",
-          detail:
-            "Écarts entre définition, gamme et fabrication réelle.",
+          detail: "Écarts entre définition, gamme et fabrication réelle.",
         },
         {
           title: "Boucler avec qualité et CND",
-          detail:
-            "Non-conformités, retours terrain, actions correctives.",
+          detail: "Non-conformités, retours terrain, actions correctives.",
         },
       ],
     },
@@ -505,8 +507,7 @@ function functionsFor(
         },
         {
           title: "Alerter sur les zones non contrôlables",
-          detail:
-            "Blocages à remonter vers BE, BM, SIM et FA.",
+          detail: "Blocages à remonter vers BE, BM, SIM et FA.",
         },
       ],
       LOD3: [
@@ -521,8 +522,7 @@ function functionsFor(
         },
         {
           title: "Statuer sur la conformité",
-          detail:
-            "Décision conforme / non conforme / dérogation éventuelle.",
+          detail: "Décision conforme / non conforme / dérogation éventuelle.",
         },
       ],
     },
@@ -1201,6 +1201,16 @@ function nodeFill(node: GraphNode) {
 export default function ViewerPage() {
   const { nodes, edges } = useMemo(() => buildGraph(), []);
 
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const draggingNodeIdRef = useRef<string | null>(null);
+  const dragOffsetRef = useRef<NodePosition>({ x: 0, y: 0 });
+  const positionsLoadedRef = useRef(false);
+
+  const [customPositions, setCustomPositions] = useState<
+    Record<string, NodePosition>
+  >({});
+  const [placementMode, setPlacementMode] = useState(false);
+
   const [selectedNodeId, setSelectedNodeId] = useState<string>("PROCESS_GLOBAL");
   const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
   const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
@@ -1217,16 +1227,119 @@ export default function ViewerPage() {
   >("global");
   const [search, setSearch] = useState("");
 
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(LS_NODE_POSITIONS);
+
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, NodePosition>;
+        setCustomPositions(parsed);
+      }
+    } catch {
+      setCustomPositions({});
+    } finally {
+      positionsLoadedRef.current = true;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!positionsLoadedRef.current) return;
+
+    window.localStorage.setItem(
+      LS_NODE_POSITIONS,
+      JSON.stringify(customPositions)
+    );
+  }, [customPositions]);
+
+  const positionedNodes = useMemo(() => {
+    return nodes.map((node) => {
+      const customPosition = customPositions[node.id];
+
+      if (!customPosition) return node;
+
+      return {
+        ...node,
+        x: customPosition.x,
+        y: customPosition.y,
+      };
+    });
+  }, [nodes, customPositions]);
+
   const nodeById = useMemo(() => {
-    return new Map(nodes.map((node) => [node.id, node]));
-  }, [nodes]);
+    return new Map(positionedNodes.map((node) => [node.id, node]));
+  }, [positionedNodes]);
 
   const selectedNode = nodeById.get(selectedNodeId);
+
+  function getSvgPoint(event: React.PointerEvent<SVGElement>): NodePosition {
+    const svg = svgRef.current;
+
+    if (!svg) {
+      return { x: 0, y: 0 };
+    }
+
+    const rect = svg.getBoundingClientRect();
+
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * WIDTH,
+      y: ((event.clientY - rect.top) / rect.height) * HEIGHT,
+    };
+  }
+
+  function startDragNode(
+    event: React.PointerEvent<SVGGElement>,
+    node: GraphNode
+  ) {
+    setSelectedNodeId(node.id);
+
+    if (!placementMode) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const point = getSvgPoint(event);
+
+    draggingNodeIdRef.current = node.id;
+    dragOffsetRef.current = {
+      x: point.x - node.x,
+      y: point.y - node.y,
+    };
+
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveDraggedNode(event: React.PointerEvent<SVGSVGElement>) {
+    const draggingNodeId = draggingNodeIdRef.current;
+
+    if (!placementMode || !draggingNodeId) return;
+
+    const point = getSvgPoint(event);
+    const nextX = clamp(point.x - dragOffsetRef.current.x, 40, WIDTH - 40);
+    const nextY = clamp(point.y - dragOffsetRef.current.y, 40, HEIGHT - 40);
+
+    setCustomPositions((previous) => ({
+      ...previous,
+      [draggingNodeId]: {
+        x: nextX,
+        y: nextY,
+      },
+    }));
+  }
+
+  function stopDraggingNode() {
+    draggingNodeIdRef.current = null;
+  }
+
+  function resetNodePositions() {
+    setCustomPositions({});
+    window.localStorage.removeItem(LS_NODE_POSITIONS);
+    setSelectedNodeId("PROCESS_GLOBAL");
+  }
 
   const visibleNodeIds = useMemo(() => {
     const ids = new Set<string>();
 
-    for (const node of nodes) {
+    for (const node of positionedNodes) {
       const searchValue = search.toLowerCase().trim();
 
       const matchSearch =
@@ -1349,7 +1462,7 @@ export default function ViewerPage() {
 
     return ids;
   }, [
-    nodes,
+    positionedNodes,
     edges,
     search,
     pillarFilter,
@@ -1391,15 +1504,19 @@ export default function ViewerPage() {
     );
   }, [edges, selectedNodeId]);
 
-  const visibleNodes = nodes.filter((node) => visibleNodeIds.has(node.id));
+  const visibleNodes = positionedNodes.filter((node) =>
+    visibleNodeIds.has(node.id)
+  );
 
   function nodeOpacity(node: GraphNode) {
+    if (placementMode) return 1;
     if (!selectedNodeId) return 1;
     if (connectedNodeIds.has(node.id)) return 1;
     return 0.18;
   }
 
   function edgeOpacity(edge: GraphEdge) {
+    if (placementMode) return 0.5;
     if (!selectedNodeId) return 0.68;
     if (edge.source === selectedNodeId || edge.target === selectedNodeId) return 1;
 
@@ -1426,7 +1543,7 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer réseau V0.1</p>
+          <p className="eyebrow">Mini-PLM · Viewer réseau V0.2</p>
           <h1>
             Architecture Pièce / HP / GPE × LOD × Métiers × Outils × Simulation
           </h1>
@@ -1546,13 +1663,36 @@ export default function ViewerPage() {
             <option value="decisionne">decisionne</option>
           </select>
 
-          <button onClick={resetFilters}>Réinitialiser</button>
+          <button
+            className={placementMode ? "activeButton" : ""}
+            onClick={() => setPlacementMode((current) => !current)}
+          >
+            {placementMode ? "Placement actif" : "Mode placement"}
+          </button>
+
+          <button onClick={resetNodePositions}>Réinit. positions</button>
+          <button onClick={resetFilters}>Réinitialiser filtres</button>
         </div>
       </section>
 
+      {placementMode ? (
+        <div className="placementBanner">
+          Mode placement actif : clique sur une bulle et déplace-la. Les positions
+          sont sauvegardées automatiquement dans le navigateur.
+        </div>
+      ) : null}
+
       <section className="layout">
         <div className="graphCard">
-          <svg viewBox={`0 0 ${WIDTH} ${HEIGHT}`} className="graphSvg" role="img">
+          <svg
+            ref={svgRef}
+            viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
+            className={placementMode ? "graphSvg graphSvgPlacement" : "graphSvg"}
+            role="img"
+            onPointerMove={moveDraggedNode}
+            onPointerUp={stopDraggingNode}
+            onPointerLeave={stopDraggingNode}
+          >
             <defs>
               <marker
                 id="arrow"
@@ -1643,21 +1783,32 @@ export default function ViewerPage() {
                 node.label,
                 node.category === "entity_function" ? 8 : 16
               );
+              const customPositionActive = Boolean(customPositions[node.id]);
 
               return (
                 <g
                   key={node.id}
                   transform={`translate(${node.x}, ${node.y})`}
-                  onClick={() => setSelectedNodeId(node.id)}
-                  className="nodeGroup"
+                  onPointerDown={(event) => startDragNode(event, node)}
+                  className={
+                    placementMode
+                      ? "nodeGroup nodeGroupPlacement"
+                      : "nodeGroup"
+                  }
                   opacity={nodeOpacity(node)}
                   filter={selected ? "url(#nodeGlow)" : undefined}
                 >
                   <circle
                     r={radius}
                     fill={nodeFill(node)}
-                    stroke={selected ? "#ffffff" : STATUS_COLORS[node.status]}
-                    strokeWidth={selected ? 4 : 3}
+                    stroke={
+                      selected
+                        ? "#ffffff"
+                        : customPositionActive
+                          ? "#facc15"
+                          : STATUS_COLORS[node.status]
+                    }
+                    strokeWidth={selected ? 4 : customPositionActive ? 3.5 : 3}
                   />
 
                   <circle
@@ -1725,6 +1876,17 @@ export default function ViewerPage() {
                   <div>
                     <span>Statut</span>
                     <strong>{selectedNode.status}</strong>
+                  </div>
+                </div>
+
+                <div className="positionGrid">
+                  <div>
+                    <span>Position X</span>
+                    <strong>{Math.round(selectedNode.x)}</strong>
+                  </div>
+                  <div>
+                    <span>Position Y</span>
+                    <strong>{Math.round(selectedNode.y)}</strong>
                   </div>
                 </div>
 
@@ -1842,7 +2004,7 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.1</p>
+            <p className="panelLabel">Lecture V0.2</p>
 
             <ul className="readingList">
               <li>
@@ -1855,18 +2017,13 @@ export default function ViewerPage() {
                 <strong>Bulles métier</strong> : BE, BM, SIM, FA et CND.
               </li>
               <li>
-                <strong>Outils</strong> : 3DEXPERIENCE, CATIA, ABAQUS, ANSA,
-                Python, etc.
+                <strong>Mode placement</strong> : déplacement libre des bulles.
               </li>
               <li>
-                <strong>Métiers SIM</strong> : Inj_c, Inj_n, Pré_chauf et SDF.
+                <strong>Sauvegarde</strong> : positions conservées dans le navigateur.
               </li>
               <li>
-                <strong>Liens cyan</strong> : synchronisation entre piliers.
-              </li>
-              <li>
-                <strong>Liens orange / rouges</strong> : impacts et blocages
-                critiques.
+                <strong>Contour jaune</strong> : position personnalisée.
               </li>
             </ul>
           </div>
@@ -1922,7 +2079,7 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 1160px;
+          max-width: 1260px;
         }
 
         .toolbar input,
@@ -1945,6 +2102,23 @@ export default function ViewerPage() {
           cursor: pointer;
           font-weight: 800;
           background: rgba(37, 99, 235, 0.34);
+        }
+
+        .toolbar .activeButton {
+          background: rgba(250, 204, 21, 0.28);
+          border-color: rgba(250, 204, 21, 0.55);
+          color: #fef9c3;
+        }
+
+        .placementBanner {
+          border: 1px solid rgba(250, 204, 21, 0.38);
+          background: rgba(113, 63, 18, 0.32);
+          color: #fef3c7;
+          padding: 11px 14px;
+          border-radius: 16px;
+          margin-bottom: 14px;
+          font-size: 13px;
+          font-weight: 700;
         }
 
         .layout {
@@ -1972,6 +2146,11 @@ export default function ViewerPage() {
           height: 100%;
           min-height: 790px;
           display: block;
+          touch-action: none;
+        }
+
+        .graphSvgPlacement {
+          cursor: grab;
         }
 
         .pillarZone {
@@ -2003,6 +2182,14 @@ export default function ViewerPage() {
         .nodeGroup {
           cursor: pointer;
           transition: opacity 0.2s ease;
+        }
+
+        .nodeGroupPlacement {
+          cursor: grab;
+        }
+
+        .nodeGroupPlacement:active {
+          cursor: grabbing;
         }
 
         .nodeText {
@@ -2071,28 +2258,32 @@ export default function ViewerPage() {
           margin: 0 0 14px 0;
         }
 
-        .metricGrid {
+        .metricGrid,
+        .positionGrid {
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 10px;
           margin-bottom: 10px;
         }
 
-        .metricGrid div {
+        .metricGrid div,
+        .positionGrid div {
           border: 1px solid rgba(148, 163, 184, 0.16);
           border-radius: 14px;
           padding: 11px;
           background: rgba(2, 6, 23, 0.45);
         }
 
-        .metricGrid span {
+        .metricGrid span,
+        .positionGrid span {
           display: block;
           color: #94a3b8;
           font-size: 11px;
           margin-bottom: 4px;
         }
 
-        .metricGrid strong {
+        .metricGrid strong,
+        .positionGrid strong {
           font-size: 15px;
           color: #f8fafc;
         }
