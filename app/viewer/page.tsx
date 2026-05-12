@@ -68,6 +68,11 @@ type Bubble = {
   isCustom?: boolean;
 };
 
+type BubbleView = Bubble & {
+  visible: boolean;
+  deleted: boolean;
+};
+
 type BubbleOverride = {
   x?: number;
   y?: number;
@@ -75,11 +80,26 @@ type BubbleOverride = {
   deleted?: boolean;
 };
 
+type BubbleLink = {
+  id: string;
+  lod: LOD;
+  sourceId: string;
+  targetId: string;
+  label: string;
+  color: string;
+};
+
+type ResolvedBubbleLink = BubbleLink & {
+  source: BubbleView;
+  target: BubbleView;
+};
+
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v2";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v2";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v3";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v3";
+const LS_BUBBLE_LINKS = "plm_free_bubble_links_v1";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -425,6 +445,7 @@ export default function ViewerPage() {
   const [bubbleOverrides, setBubbleOverrides] = useState<
     Record<string, BubbleOverride>
   >({});
+  const [bubbleLinks, setBubbleLinks] = useState<BubbleLink[]>([]);
 
   const [selectedBubbleId, setSelectedBubbleId] = useState<string>(
     "LOD1_PIECE_BE"
@@ -441,11 +462,15 @@ export default function ViewerPage() {
   const [freeBubbleText, setFreeBubbleText] = useState<string>("Nouvelle bulle");
   const [freeBubbleColor, setFreeBubbleColor] = useState<string>("#facc15");
 
+  const [linkTargetId, setLinkTargetId] = useState<string>("");
+  const [linkLabel, setLinkLabel] = useState<string>("Lien");
+  const [linkColor, setLinkColor] = useState<string>("#cbd5e1");
+
   const allBaseBubbles = useMemo(() => {
     return [...defaultBubbles, ...customBubbles];
   }, [defaultBubbles, customBubbles]);
 
-  const bubbles = useMemo(() => {
+  const bubbles = useMemo<BubbleView[]>(() => {
     return allBaseBubbles.map((bubble) => {
       const override = bubbleOverrides[bubble.id];
 
@@ -459,10 +484,15 @@ export default function ViewerPage() {
     });
   }, [allBaseBubbles, bubbleOverrides]);
 
+  const bubbleById = useMemo(() => {
+    return new Map(bubbles.map((bubble) => [bubble.id, bubble]));
+  }, [bubbles]);
+
   useEffect(() => {
     try {
       const rawOverrides = window.localStorage.getItem(LS_BUBBLE_OVERRIDES);
       const rawCustomBubbles = window.localStorage.getItem(LS_CUSTOM_BUBBLES);
+      const rawLinks = window.localStorage.getItem(LS_BUBBLE_LINKS);
 
       if (rawOverrides) {
         setBubbleOverrides(
@@ -473,9 +503,14 @@ export default function ViewerPage() {
       if (rawCustomBubbles) {
         setCustomBubbles(JSON.parse(rawCustomBubbles) as Bubble[]);
       }
+
+      if (rawLinks) {
+        setBubbleLinks(JSON.parse(rawLinks) as BubbleLink[]);
+      }
     } catch {
       setBubbleOverrides({});
       setCustomBubbles([]);
+      setBubbleLinks([]);
     } finally {
       storageLoadedRef.current = true;
     }
@@ -498,6 +533,12 @@ export default function ViewerPage() {
       JSON.stringify(customBubbles)
     );
   }, [customBubbles]);
+
+  useEffect(() => {
+    if (!storageLoadedRef.current) return;
+
+    window.localStorage.setItem(LS_BUBBLE_LINKS, JSON.stringify(bubbleLinks));
+  }, [bubbleLinks]);
 
   useEffect(() => {
     if (newBubbleFamily === "LIBRE") return;
@@ -537,6 +578,25 @@ export default function ViewerPage() {
     );
   }, [bubbles, selectedBubbleId]);
 
+  const linkTargetOptions = useMemo(() => {
+    return activeLodBubbles.filter((bubble) => bubble.id !== selectedBubbleId);
+  }, [activeLodBubbles, selectedBubbleId]);
+
+  useEffect(() => {
+    if (linkTargetOptions.length === 0) {
+      setLinkTargetId("");
+      return;
+    }
+
+    const targetStillAvailable = linkTargetOptions.some(
+      (bubble) => bubble.id === linkTargetId
+    );
+
+    if (!targetStillAvailable) {
+      setLinkTargetId(linkTargetOptions[0].id);
+    }
+  }, [linkTargetOptions, linkTargetId]);
+
   const filteredBubbles = useMemo(() => {
     const searchValue = search.toLowerCase().trim();
 
@@ -562,6 +622,32 @@ export default function ViewerPage() {
     return filteredBubbles.filter((bubble) => bubble.visible);
   }, [filteredBubbles]);
 
+  const activeLodLinks = useMemo<ResolvedBubbleLink[]>(() => {
+    const resolvedLinks: ResolvedBubbleLink[] = [];
+
+    for (const link of bubbleLinks) {
+      if (link.lod !== activeLod) continue;
+
+      const source = bubbleById.get(link.sourceId);
+      const target = bubbleById.get(link.targetId);
+
+      if (!source || !target) continue;
+      if (source.deleted || target.deleted) continue;
+
+      resolvedLinks.push({
+        ...link,
+        source,
+        target,
+      });
+    }
+
+    return resolvedLinks;
+  }, [bubbleLinks, bubbleById, activeLod]);
+
+  const visibleLinks = useMemo(() => {
+    return activeLodLinks.filter((link) => link.source.visible && link.target.visible);
+  }, [activeLodLinks]);
+
   function getSvgPoint(event: ReactPointerEvent<SVGElement>): Position {
     const svg = svgRef.current;
 
@@ -579,7 +665,7 @@ export default function ViewerPage() {
 
   function startDragBubble(
     event: ReactPointerEvent<SVGGElement>,
-    bubble: Bubble & { visible: boolean; deleted: boolean }
+    bubble: BubbleView
   ) {
     setSelectedBubbleId(bubble.id);
 
@@ -692,6 +778,39 @@ export default function ViewerPage() {
     setSelectedBubbleId(id);
   }
 
+  function createLinkFromSelectedBubble() {
+    if (!selectedBubble) return;
+    if (!linkTargetId) return;
+    if (selectedBubble.id === linkTargetId) return;
+
+    const targetBubble = bubbleById.get(linkTargetId);
+
+    if (!targetBubble || targetBubble.deleted) return;
+
+    const id = `LINK_${activeLod}_${Date.now()}_${Math.round(
+      Math.random() * 100000
+    )}`;
+
+    const nextLink: BubbleLink = {
+      id,
+      lod: activeLod,
+      sourceId: selectedBubble.id,
+      targetId: targetBubble.id,
+      label: linkLabel.trim() || "Lien",
+      color: linkColor,
+    };
+
+    setBubbleLinks((previous) => [...previous, nextLink]);
+  }
+
+  function deleteLink(linkId: string) {
+    setBubbleLinks((previous) => previous.filter((link) => link.id !== linkId));
+  }
+
+  function deleteAllActiveLodLinks() {
+    setBubbleLinks((previous) => previous.filter((link) => link.lod !== activeLod));
+  }
+
   function deleteBubble(bubbleId: string) {
     const bubble = bubbles.find((item) => item.id === bubbleId);
 
@@ -717,6 +836,12 @@ export default function ViewerPage() {
         },
       }));
     }
+
+    setBubbleLinks((previous) =>
+      previous.filter(
+        (link) => link.sourceId !== bubbleId && link.targetId !== bubbleId
+      )
+    );
 
     if (selectedBubbleId === bubbleId) {
       setSelectedBubbleId("");
@@ -748,6 +873,13 @@ export default function ViewerPage() {
 
       return next;
     });
+
+    setBubbleLinks((previous) =>
+      previous.filter(
+        (link) =>
+          !idsToDeleteSet.has(link.sourceId) && !idsToDeleteSet.has(link.targetId)
+      )
+    );
 
     if (idsToDeleteSet.has(selectedBubbleId)) {
       setSelectedBubbleId("");
@@ -786,6 +918,7 @@ export default function ViewerPage() {
   function resetEverything() {
     setBubbleOverrides({});
     setCustomBubbles([]);
+    setBubbleLinks([]);
     setSearch("");
     setFamilyFilter("ALL");
     setPillarFilter("ALL");
@@ -793,9 +926,12 @@ export default function ViewerPage() {
     setSelectedBubbleId("LOD1_PIECE_BE");
     setFreeBubbleText("Nouvelle bulle");
     setFreeBubbleColor("#facc15");
+    setLinkLabel("Lien");
+    setLinkColor("#cbd5e1");
 
     window.localStorage.removeItem(LS_BUBBLE_OVERRIDES);
     window.localStorage.removeItem(LS_CUSTOM_BUBBLES);
+    window.localStorage.removeItem(LS_BUBBLE_LINKS);
   }
 
   const newBubbleOptions = getOptionsForFamily(newBubbleFamily);
@@ -809,8 +945,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.6</p>
-          <h1>Placement libre par LOD avec bulles personnalisées</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.7</p>
+          <h1>Placement libre par LOD avec liens entre bulles</h1>
         </div>
 
         <div className="toolbar">
@@ -867,6 +1003,7 @@ export default function ViewerPage() {
             (bubble) => bubble.lod === lod && !bubble.deleted
           );
           const visibleCount = lodBubbles.filter((bubble) => bubble.visible).length;
+          const linkCount = bubbleLinks.filter((link) => link.lod === lod).length;
 
           return (
             <button
@@ -877,7 +1014,7 @@ export default function ViewerPage() {
               <strong>{LOD_LABELS[lod]}</strong>
               <span>{LOD_DETAILS[lod]}</span>
               <em>
-                {visibleCount}/{lodBubbles.length} visibles
+                {visibleCount}/{lodBubbles.length} visibles · {linkCount} lien(s)
               </em>
             </button>
           );
@@ -909,6 +1046,18 @@ export default function ViewerPage() {
                   <feMergeNode in="SourceGraphic" />
                 </feMerge>
               </filter>
+
+              <marker
+                id="linkArrow"
+                markerWidth="10"
+                markerHeight="10"
+                refX="8"
+                refY="3"
+                orient="auto"
+                markerUnits="strokeWidth"
+              >
+                <path d="M0,0 L0,6 L9,3 z" fill="#cbd5e1" />
+              </marker>
             </defs>
 
             <rect
@@ -950,6 +1099,44 @@ export default function ViewerPage() {
                     className="pillarTitle"
                   >
                     {PILLAR_LABELS[pillar]}
+                  </text>
+                </g>
+              );
+            })}
+
+            {visibleLinks.map((link) => {
+              const midX = (link.source.x + link.target.x) / 2;
+              const midY = (link.source.y + link.target.y) / 2;
+
+              return (
+                <g key={link.id} className="linkGroup">
+                  <line
+                    x1={link.source.x}
+                    y1={link.source.y}
+                    x2={link.target.x}
+                    y2={link.target.y}
+                    stroke={link.color}
+                    strokeWidth={2}
+                    strokeDasharray="6 5"
+                    markerEnd="url(#linkArrow)"
+                  />
+
+                  <rect
+                    x={midX - Math.max(link.label.length * 3.8 + 14, 28)}
+                    y={midY - 13}
+                    width={Math.max(link.label.length * 7.6 + 28, 56)}
+                    height={24}
+                    rx={12}
+                    className="linkLabelBackground"
+                  />
+
+                  <text
+                    x={midX}
+                    y={midY + 4}
+                    textAnchor="middle"
+                    className="linkLabel"
+                  >
+                    {link.label}
                   </text>
                 </g>
               );
@@ -1013,7 +1200,8 @@ export default function ViewerPage() {
               <strong>{LOD_LABELS[activeLod]}</strong>
               <span>{LOD_DETAILS[activeLod]}</span>
               <em>
-                {activeLodVisibleCount}/{activeLodTotalCount} bulles visibles
+                {activeLodVisibleCount}/{activeLodTotalCount} bulles visibles ·{" "}
+                {activeLodLinks.length} lien(s)
               </em>
             </div>
           </div>
@@ -1071,6 +1259,112 @@ export default function ViewerPage() {
             ) : (
               <p className="empty">Aucune bulle sélectionnée.</p>
             )}
+          </div>
+
+          <div className="panelBlock">
+            <p className="panelLabel">Créer un lien dans {activeLod}</p>
+
+            {selectedBubble ? (
+              <div className="linkCreator">
+                <div className="linkSource">
+                  <span>Source</span>
+                  <strong>{selectedBubble.label}</strong>
+                  <small>{selectedBubble.subtitle}</small>
+                </div>
+
+                <select
+                  value={linkTargetId}
+                  onChange={(event) => setLinkTargetId(event.target.value)}
+                >
+                  {linkTargetOptions.length === 0 ? (
+                    <option value="">Aucune cible disponible</option>
+                  ) : (
+                    linkTargetOptions.map((bubble) => (
+                      <option key={bubble.id} value={bubble.id}>
+                        {bubble.label} · {bubble.subtitle}
+                      </option>
+                    ))
+                  )}
+                </select>
+
+                <input
+                  value={linkLabel}
+                  onChange={(event) => setLinkLabel(event.target.value)}
+                  placeholder="Nom du lien..."
+                />
+
+                <input
+                  type="color"
+                  value={linkColor}
+                  onChange={(event) => setLinkColor(event.target.value)}
+                  title="Couleur du lien"
+                />
+
+                <button onClick={createLinkFromSelectedBubble}>
+                  Créer le lien
+                </button>
+              </div>
+            ) : (
+              <p className="empty">
+                Sélectionne une bulle pour créer un lien sortant.
+              </p>
+            )}
+
+            <p className="hint">
+              Le lien part de la bulle sélectionnée vers la cible choisie. Il
+              reste attaché aux bulles quand tu les déplaces.
+            </p>
+          </div>
+
+          <div className="panelBlock">
+            <div className="libraryHeader">
+              <div>
+                <p className="panelLabel">Liens · {activeLod}</p>
+                <p className="libraryCount">
+                  {activeLodLinks.length} lien(s) dans l’onglet actif
+                </p>
+              </div>
+
+              <div className="libraryActions">
+                <button className="dangerButton" onClick={deleteAllActiveLodLinks}>
+                  Supprimer liens LOD
+                </button>
+              </div>
+            </div>
+
+            <div className="linkList">
+              {activeLodLinks.length === 0 ? (
+                <p className="empty">Aucun lien dans cet onglet.</p>
+              ) : (
+                activeLodLinks.map((link) => (
+                  <div key={link.id} className="linkItem">
+                    <span
+                      className="linkDot"
+                      style={{ background: link.color }}
+                    />
+
+                    <div className="linkItemContent">
+                      <strong>{link.label}</strong>
+                      <small>
+                        {link.source.label} → {link.target.label}
+                      </small>
+                      <em>
+                        {link.source.visible && link.target.visible
+                          ? "Affiché"
+                          : "Masqué : source ou cible non visible"}
+                      </em>
+                    </div>
+
+                    <button
+                      className="miniDeleteButton"
+                      onClick={() => deleteLink(link.id)}
+                    >
+                      Suppr.
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
           <div className="panelBlock">
@@ -1206,26 +1500,23 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.6</p>
+            <p className="panelLabel">Lecture V0.7</p>
 
             <ul className="readingList">
               <li>
                 <strong>Onglets</strong> : LOD1, LOD2 et LOD3 séparés.
               </li>
               <li>
-                <strong>Cadres fixes</strong> : Pièce, HP et GPE conservés dans chaque onglet.
+                <strong>Bulles</strong> : métiers, sous-métiers, outils et texte libre.
               </li>
               <li>
-                <strong>Sous-métiers BE</strong> : Aéro, Méca, Ther, Sim_dim, Sim_métal.
+                <strong>Liens</strong> : création de relations entre deux bulles du même LOD.
               </li>
               <li>
-                <strong>Sous-métiers BM</strong> : Out, CAO.
+                <strong>Déplacement</strong> : les liens suivent automatiquement les bulles déplacées.
               </li>
               <li>
-                <strong>Sous-métiers SIM</strong> : Inj_C, Inj_N, Pré_chau, Sdf.
-              </li>
-              <li>
-                <strong>Texte libre</strong> : création de bulles personnalisées avec couleur au choix.
+                <strong>Affichage</strong> : un lien s’affiche seulement si ses deux bulles sont visibles.
               </li>
             </ul>
           </div>
@@ -1292,7 +1583,10 @@ export default function ViewerPage() {
         .addBubbleGrid button,
         .selectedActions button,
         .libraryActions button,
-        .miniDeleteButton {
+        .miniDeleteButton,
+        .linkCreator input,
+        .linkCreator select,
+        .linkCreator button {
           border: 1px solid rgba(148, 163, 184, 0.28);
           background: rgba(15, 23, 42, 0.84);
           color: #e5e7eb;
@@ -1302,7 +1596,8 @@ export default function ViewerPage() {
           outline: none;
         }
 
-        .addBubbleGrid input[type="color"] {
+        .addBubbleGrid input[type="color"],
+        .linkCreator input[type="color"] {
           width: 58px;
           min-width: 58px;
           height: 40px;
@@ -1318,7 +1613,8 @@ export default function ViewerPage() {
         .addBubbleGrid button,
         .selectedActions button,
         .libraryActions button,
-        .miniDeleteButton {
+        .miniDeleteButton,
+        .linkCreator button {
           cursor: pointer;
           font-weight: 800;
           background: rgba(37, 99, 235, 0.34);
@@ -1441,6 +1737,22 @@ export default function ViewerPage() {
           fill: #94a3b8;
           font-size: 13px;
           font-weight: 700;
+        }
+
+        .linkGroup {
+          pointer-events: none;
+        }
+
+        .linkLabelBackground {
+          fill: rgba(2, 6, 23, 0.82);
+          stroke: rgba(203, 213, 225, 0.18);
+          stroke-width: 1;
+        }
+
+        .linkLabel {
+          fill: #e5e7eb;
+          font-size: 11px;
+          font-weight: 800;
         }
 
         .bubbleGroup {
@@ -1614,6 +1926,83 @@ export default function ViewerPage() {
 
         .addBubbleGridFree {
           grid-template-columns: 1fr 1.3fr 64px auto;
+        }
+
+        .linkCreator {
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .linkSource {
+          border: 1px solid rgba(148, 163, 184, 0.18);
+          background: rgba(2, 6, 23, 0.42);
+          border-radius: 14px;
+          padding: 10px;
+          display: grid;
+          gap: 3px;
+        }
+
+        .linkSource span {
+          color: #94a3b8;
+          font-size: 11px;
+          font-weight: 800;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+        }
+
+        .linkSource strong {
+          color: #f8fafc;
+          font-size: 14px;
+        }
+
+        .linkSource small {
+          color: #94a3b8;
+          font-size: 12px;
+        }
+
+        .linkList {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          max-height: 220px;
+          overflow: auto;
+          padding-right: 4px;
+        }
+
+        .linkItem {
+          display: grid;
+          grid-template-columns: 10px 1fr auto;
+          gap: 9px;
+          align-items: center;
+          border: 1px solid rgba(148, 163, 184, 0.16);
+          background: rgba(2, 6, 23, 0.42);
+          border-radius: 14px;
+          padding: 9px;
+        }
+
+        .linkDot {
+          width: 10px;
+          height: 100%;
+          min-height: 42px;
+          border-radius: 999px;
+        }
+
+        .linkItemContent {
+          display: grid;
+          gap: 3px;
+        }
+
+        .linkItemContent strong {
+          font-size: 13px;
+          color: #f8fafc;
+        }
+
+        .linkItemContent small,
+        .linkItemContent em {
+          color: #94a3b8;
+          font-size: 12px;
+          font-style: normal;
         }
 
         .hint {
