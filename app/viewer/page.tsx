@@ -1,7 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent } from "react";
+import type {
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 
 type Pillar = "PIECE" | "HP" | "GPE";
 type LOD = "LOD1" | "LOD2" | "LOD3";
@@ -97,9 +100,9 @@ type ResolvedBubbleLink = BubbleLink & {
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v4";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v4";
-const LS_BUBBLE_LINKS = "plm_free_bubble_links_v2";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v5";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v5";
+const LS_BUBBLE_LINKS = "plm_free_bubble_links_v3";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -688,6 +691,28 @@ export default function ViewerPage() {
     });
   }
 
+  function handleBubbleClick(
+    event: ReactMouseEvent<SVGGElement>,
+    bubble: BubbleView
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    setSelectedBubbleId(bubble.id);
+
+    if (linkMode) {
+      selectBubbleForLink(bubble.id);
+    }
+  }
+
+  function handleLibraryBubbleClick(bubbleId: string) {
+    setSelectedBubbleId(bubbleId);
+
+    if (linkMode) {
+      selectBubbleForLink(bubbleId);
+    }
+  }
+
   function startDragBubble(
     event: ReactPointerEvent<SVGGElement>,
     bubble: BubbleView
@@ -695,9 +720,6 @@ export default function ViewerPage() {
     setSelectedBubbleId(bubble.id);
 
     if (linkMode) {
-      event.preventDefault();
-      event.stopPropagation();
-      selectBubbleForLink(bubble.id);
       return;
     }
 
@@ -1005,8 +1027,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.8</p>
-          <h1>Placement libre par LOD avec création de liens par sélection</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.9</p>
+          <h1>Placement libre par LOD avec création de liens par clic</h1>
         </div>
 
         <div className="toolbar">
@@ -1093,8 +1115,8 @@ export default function ViewerPage() {
 
       {linkMode ? (
         <section className="linkModeBanner">
-          Mode lien actif : clique sur deux bulles dans le viewer, puis utilise
-          “Créer lien” ou “Casser lien”.
+          Mode lien actif : clique sur deux bulles dans le viewer ou dans la
+          bibliothèque, puis utilise “Créer lien” ou “Casser lien”.
         </section>
       ) : null}
 
@@ -1245,6 +1267,7 @@ export default function ViewerPage() {
                         : "bubbleGroup"
                   }
                   onPointerDown={(event) => startDragBubble(event, bubble)}
+                  onClick={(event) => handleBubbleClick(event, bubble)}
                   filter={selected || isLinkSelected ? "url(#bubbleGlow)" : undefined}
                 >
                   <rect
@@ -1376,10 +1399,9 @@ export default function ViewerPage() {
             </div>
 
             <p className="hint">
+              Sélection actuelle : <strong>{selectedLinkBubbles.length}/2</strong>.{" "}
               Liens existants entre les deux bulles sélectionnées :{" "}
-              <strong>{selectedPairExistingLinks.length}</strong>. Le bouton
-              “Casser lien” supprime tous les liens entre ces deux bulles, dans
-              les deux sens.
+              <strong>{selectedPairExistingLinks.length}</strong>.
             </p>
           </div>
 
@@ -1583,7 +1605,7 @@ export default function ViewerPage() {
                   >
                     <button
                       className="bubbleListMain"
-                      onClick={() => setSelectedBubbleId(bubble.id)}
+                      onClick={() => handleLibraryBubbleClick(bubble.id)}
                     >
                       <span
                         className="bubbleListDot"
@@ -1622,11 +1644,14 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.8</p>
+            <p className="panelLabel">Lecture V0.9</p>
 
             <ul className="readingList">
               <li>
                 <strong>Mode lien</strong> : clique sur deux bulles pour les sélectionner.
+              </li>
+              <li>
+                <strong>Sélection corrigée</strong> : les bulles sélectionnées remontent dans le bloc Créer / casser.
               </li>
               <li>
                 <strong>Créer lien</strong> : crée un lien de la bulle 1 vers la bulle 2.
@@ -1635,10 +1660,7 @@ export default function ViewerPage() {
                 <strong>Casser lien</strong> : supprime tous les liens entre les deux bulles sélectionnées.
               </li>
               <li>
-                <strong>Contour cyan</strong> : bulles sélectionnées pour le lien.
-              </li>
-              <li>
-                <strong>Déplacement</strong> : désactive le mode lien pour déplacer les bulles.
+                <strong>Bibliothèque</strong> : en mode lien, cliquer une bulle dans la bibliothèque la sélectionne aussi pour le lien.
               </li>
             </ul>
           </div>
