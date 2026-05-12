@@ -2,25 +2,27 @@
 
 import { useMemo, useState } from "react";
 
+type Pillar = "PIECE" | "HP" | "GPE";
+type LOD = "LOD1" | "LOD2" | "LOD3";
 type Entity = "BE" | "BM" | "SIM" | "FA" | "CND" | "TRANSVERSE";
-type LOD = "L1" | "L2" | "L3";
 
-type NodeType =
-  | "produit"
-  | "entite_lod"
-  | "zone"
-  | "interface"
-  | "parametre"
-  | "risque"
-  | "decision"
-  | "preuve"
-  | "validation";
+type NodeCategory =
+  | "process"
+  | "pillar_hub"
+  | "entity_function"
+  | "gate"
+  | "risk"
+  | "proof"
+  | "decision";
 
 type NodeStatus = "non_demarre" | "en_cours" | "bloque" | "valide";
 
 type RelationType =
+  | "structure"
   | "alimente"
   | "impacte"
+  | "synchronise"
+  | "construit"
   | "valide"
   | "bloque"
   | "justifie"
@@ -28,22 +30,29 @@ type RelationType =
   | "industrialise"
   | "fabrique"
   | "simule"
-  | "corrige"
-  | "correspond";
+  | "decisionne";
 
 type Criticality = "faible" | "moyenne" | "forte";
+
+type FunctionItem = {
+  title: string;
+  detail: string;
+};
 
 type GraphNode = {
   id: string;
   label: string;
+  subtitle: string;
   entity: Entity;
+  pillar?: Pillar;
   lod?: LOD;
-  type: NodeType;
+  category: NodeCategory;
   x: number;
   y: number;
   maturity: number;
   status: NodeStatus;
   description: string;
+  functions: FunctionItem[];
 };
 
 type GraphEdge = {
@@ -56,6 +65,34 @@ type GraphEdge = {
   bidirectional?: boolean;
 };
 
+const WIDTH = 1600;
+const HEIGHT = 980;
+
+const PILLARS = ["PIECE", "HP", "GPE"] as const;
+const LODS = ["LOD1", "LOD2", "LOD3"] as const;
+const ENTITIES = ["BE", "BM", "SIM", "FA", "CND"] as const;
+
+const PILLAR_LABELS: Record<Pillar, string> = {
+  PIECE: "Pièce",
+  HP: "HP",
+  GPE: "GPE",
+};
+
+const LOD_LABELS: Record<LOD, string> = {
+  LOD1: "LOD1 · Cadrage",
+  LOD2: "LOD2 · Convergence",
+  LOD3: "LOD3 · Validation",
+};
+
+const ENTITY_LABELS: Record<Entity, string> = {
+  BE: "BE",
+  BM: "BM",
+  SIM: "SIM",
+  FA: "FA",
+  CND: "CND",
+  TRANSVERSE: "Transverse",
+};
+
 const ENTITY_COLORS: Record<Entity, string> = {
   BE: "#60a5fa",
   BM: "#f59e0b",
@@ -65,16 +102,25 @@ const ENTITY_COLORS: Record<Entity, string> = {
   TRANSVERSE: "#e5e7eb",
 };
 
+const PILLAR_COLORS: Record<Pillar, string> = {
+  PIECE: "#38bdf8",
+  HP: "#facc15",
+  GPE: "#c084fc",
+};
+
 const STATUS_COLORS: Record<NodeStatus, string> = {
-  non_demarre: "#6b7280",
+  non_demarre: "#64748b",
   en_cours: "#38bdf8",
   bloque: "#ef4444",
   valide: "#22c55e",
 };
 
 const RELATION_COLORS: Record<RelationType, string> = {
-  alimente: "#94a3b8",
+  structure: "#94a3b8",
+  alimente: "#cbd5e1",
   impacte: "#f97316",
+  synchronise: "#22d3ee",
+  construit: "#60a5fa",
   valide: "#22c55e",
   bloque: "#ef4444",
   justifie: "#a78bfa",
@@ -82,24 +128,30 @@ const RELATION_COLORS: Record<RelationType, string> = {
   industrialise: "#f59e0b",
   fabrique: "#34d399",
   simule: "#818cf8",
-  corrige: "#facc15",
-  correspond: "#cbd5e1",
+  decisionne: "#facc15",
 };
 
-const WIDTH = 1400;
-const HEIGHT = 880;
-const CX = WIDTH / 2;
-const CY = HEIGHT / 2;
+const PILLAR_X: Record<Pillar, number> = {
+  PIECE: 360,
+  HP: 800,
+  GPE: 1240,
+};
 
-function polar(cx: number, cy: number, radius: number, angleDeg: number) {
-  const angle = ((angleDeg - 90) * Math.PI) / 180;
-  return {
-    x: cx + radius * Math.cos(angle),
-    y: cy + radius * Math.sin(angle),
-  };
-}
+const LOD_Y: Record<LOD, number> = {
+  LOD1: 250,
+  LOD2: 530,
+  LOD3: 810,
+};
 
-function wrapLabel(label: string, maxLength = 18) {
+const ENTITY_OFFSETS: Record<Exclude<Entity, "TRANSVERSE">, { dx: number; dy: number }> = {
+  BE: { dx: -128, dy: -58 },
+  BM: { dx: 0, dy: -84 },
+  SIM: { dx: 128, dy: -58 },
+  FA: { dx: -74, dy: 68 },
+  CND: { dx: 74, dy: 68 },
+};
+
+function wrapLabel(label: string, maxLength = 15) {
   const words = label.split(" ");
   const lines: string[] = [];
   let current = "";
@@ -117,218 +169,122 @@ function wrapLabel(label: string, maxLength = 18) {
   return lines.slice(0, 4);
 }
 
+function getNodeId(pillar: Pillar, lod: LOD, entity?: Exclude<Entity, "TRANSVERSE">) {
+  if (!entity) return `${pillar}_${lod}_HUB`;
+  return `${pillar}_${lod}_${entity}`;
+}
+
+function maturityByLOD(lod: LOD) {
+  if (lod === "LOD1") return 90;
+  if (lod === "LOD2") return 55;
+  return 25;
+}
+
+function statusByLOD(lod: LOD): NodeStatus {
+  if (lod === "LOD1") return "valide";
+  if (lod === "LOD2") return "en_cours";
+  return "non_demarre";
+}
+
+function functionsFor(entity: Exclude<Entity, "TRANSVERSE">, pillar: Pillar, lod: LOD): FunctionItem[] {
+  const pillarLabel = PILLAR_LABELS[pillar];
+
+  const base: Record<Exclude<Entity, "TRANSVERSE">, Record<LOD, FunctionItem[]>> = {
+    BE: {
+      LOD1: [
+        { title: "Définir l’intention produit", detail: `Fonction attendue sur le pilier ${pillarLabel}.` },
+        { title: "Identifier les interfaces", detail: "Interfaces fonctionnelles, géométriques et système." },
+        { title: "Porter les exigences", detail: "Exigences principales, contraintes d’encombrement et hypothèses fortes." },
+      ],
+      LOD2: [
+        { title: "Construire la géométrie paramétrée", detail: "Variantes CAO, paramètres, règles de conception." },
+        { title: "Préparer la convergence", detail: "Tolérances provisoires, interfaces détaillées, compromis métier." },
+        { title: "Intégrer les retours métiers", detail: "Retours BM, SIM, FA et CND dans la définition intermédiaire." },
+      ],
+      LOD3: [
+        { title: "Libérer la définition", detail: "CAO détaillée, plans, tolérances et interfaces figées." },
+        { title: "Tracer la maturité", detail: "Lien entre définition finale, preuves et décisions." },
+        { title: "Supporter le dossier final", detail: "Données exploitables par méthodes, fabrication et contrôle." },
+      ],
+    },
+    BM: {
+      LOD1: [
+        { title: "Définir le procédé pressenti", detail: `Première logique industrielle du pilier ${pillarLabel}.` },
+        { title: "Identifier les contraintes méthodes", detail: "Fabricabilité, outillage, chaîne process, hypothèses de gamme." },
+        { title: "Contribuer aux règles de conception", detail: "Contraintes process à intégrer très tôt par le BE." },
+      ],
+      LOD2: [
+        { title: "Construire la gamme prévisionnelle", detail: "Séquences principales, paramètres process, outillages pressentis." },
+        { title: "Vérifier la fabricabilité", detail: "Analyse des formes, accès, reprises, bridage, risques process." },
+        { title: "Boucler avec BE et SIM", detail: "Retour sur géométrie et besoin de justification par simulation." },
+      ],
+      LOD3: [
+        { title: "Figer la gamme détaillée", detail: "Fiches méthodes, paramètres process, outillages validés." },
+        { title: "Préparer l’exécution FA", detail: "Dossier transmissible atelier." },
+        { title: "Associer le plan de contrôle", detail: "Lien direct avec CND et qualité." },
+      ],
+    },
+    SIM: {
+      LOD1: [
+        { title: "Identifier les phénomènes physiques", detail: `Phénomènes à vérifier sur le pilier ${pillarLabel}.` },
+        { title: "Définir les critères calcul", detail: "Critères de performance, marges, zones critiques." },
+        { title: "Préparer la stratégie simulation", detail: "Niveau de modèle attendu selon la maturité LOD." },
+      ],
+      LOD2: [
+        { title: "Construire le modèle intermédiaire", detail: "Modèle simplifié ou semi-détaillé, hypothèses et maillage." },
+        { title: "Comparer les variantes", detail: "Analyse de sensibilité, paramètres influents, orientation de conception." },
+        { title: "Identifier les zones sensibles", detail: "Zones critiques à partager avec BE, BM et CND." },
+      ],
+      LOD3: [
+        { title: "Produire le rapport validé", detail: "Calculs finaux, marges, justification et traçabilité." },
+        { title: "Justifier la définition", detail: "Lien entre résultats, CAO libérée et décision RdC." },
+        { title: "Appuyer la preuve numérique", detail: "Élément de preuve exploitable dans la validation produit." },
+      ],
+    },
+    FA: {
+      LOD1: [
+        { title: "Évaluer la capacité atelier", detail: `Moyens et contraintes disponibles pour le pilier ${pillarLabel}.` },
+        { title: "Identifier les risques terrain", detail: "Accès, montage, manutention, temps, moyens." },
+        { title: "Remonter les contraintes réelles", detail: "Contraintes opérationnelles à intégrer dès le cadrage." },
+      ],
+      LOD2: [
+        { title: "Tester la faisabilité atelier", detail: "Séquences de fabrication, accès, montage, moyens réels." },
+        { title: "Contribuer au choix process", detail: "Retours opérationnels sur gamme prévisionnelle." },
+        { title: "Qualifier les risques d’exécution", detail: "Points bloquants ou sensibles avant passage en LOD3." },
+      ],
+      LOD3: [
+        { title: "Exécuter le dossier fabrication", detail: "Instructions atelier, moyens, temps, contrôle exécution." },
+        { title: "Tracer les écarts", detail: "Écarts entre définition, gamme et fabrication réelle." },
+        { title: "Boucler avec qualité et CND", detail: "Non-conformités, retours terrain, actions correctives." },
+      ],
+    },
+    CND: {
+      LOD1: [
+        { title: "Définir la stratégie de contrôle", detail: `Stratégie CND initiale pour le pilier ${pillarLabel}.` },
+        { title: "Identifier les zones critiques", detail: "Zones à risque, défauts potentiels, exigences qualité." },
+        { title: "Évaluer la contrôlabilité", detail: "Première lecture des accès et limites de contrôle." },
+      ],
+      LOD2: [
+        { title: "Vérifier l’accessibilité contrôle", detail: "Contrôlabilité des formes, accès, moyens et méthodes candidates." },
+        { title: "Relier défauts et procédé", detail: "Défauts probables issus du process, criticité et détectabilité." },
+        { title: "Alerter sur les zones non contrôlables", detail: "Blocages à remonter vers BE, BM, SIM et FA." },
+      ],
+      LOD3: [
+        { title: "Figer la procédure CND", detail: "Procédure, critères d’acceptation, fréquence, moyen de contrôle." },
+        { title: "Produire le PV contrôle", detail: "Preuve qualité rattachée au produit et au pilier." },
+        { title: "Statuer sur la conformité", detail: "Décision conforme / non conforme / dérogation éventuelle." },
+      ],
+    },
+  };
+
+  return base[entity][lod];
+}
+
 function buildGraph() {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
+  let edgeIndex = 0;
 
-  const entityAngles: Record<Exclude<Entity, "TRANSVERSE">, number> = {
-    BE: 0,
-    BM: 72,
-    SIM: 144,
-    FA: 216,
-    CND: 288,
-  };
-
-  const lodRadius: Record<LOD, number> = {
-    L1: 160,
-    L2: 295,
-    L3: 430,
-  };
-
-  const lodLabels: Record<Exclude<Entity, "TRANSVERSE">, Record<LOD, string>> = {
-    BE: {
-      L1: "BE L1 - Fonction produit",
-      L2: "BE L2 - Géométrie paramétrée",
-      L3: "BE L3 - Définition libérée",
-    },
-    BM: {
-      L1: "BM L1 - Procédé pressenti",
-      L2: "BM L2 - Gamme prévisionnelle",
-      L3: "BM L3 - Gamme détaillée",
-    },
-    SIM: {
-      L1: "SIM L1 - Besoin simulation",
-      L2: "SIM L2 - Modèle intermédiaire",
-      L3: "SIM L3 - Rapport validé",
-    },
-    FA: {
-      L1: "FA L1 - Capacité atelier",
-      L2: "FA L2 - Faisabilité fabrication",
-      L3: "FA L3 - Dossier fabrication",
-    },
-    CND: {
-      L1: "CND L1 - Stratégie contrôle",
-      L2: "CND L2 - Accessibilité contrôle",
-      L3: "CND L3 - PV contrôle",
-    },
-  };
-
-  const descriptions: Record<Exclude<Entity, "TRANSVERSE">, Record<LOD, string>> = {
-    BE: {
-      L1: "Définit la fonction produit, les exigences principales et l’architecture générale.",
-      L2: "Construit les variantes, la géométrie paramétrée, les interfaces et les premières tolérances.",
-      L3: "Fige la définition CAO, les plans, les interfaces et les tolérances validées.",
-    },
-    BM: {
-      L1: "Identifie le procédé pressenti, les contraintes industrielles majeures et les hypothèses méthodes.",
-      L2: "Construit la gamme prévisionnelle, les règles de fabricabilité et les besoins outillage.",
-      L3: "Fige la gamme détaillée, les fiches méthodes, les paramètres process et les outillages validés.",
-    },
-    SIM: {
-      L1: "Identifie les phénomènes physiques à vérifier et les critères de performance.",
-      L2: "Produit les modèles simplifiés ou semi-détaillés, les maillages et les premiers résultats.",
-      L3: "Fournit les calculs validés, les marges, les rapports et les justifications techniques.",
-    },
-    FA: {
-      L1: "Évalue les moyens disponibles, les contraintes atelier et la capacité de fabrication.",
-      L2: "Teste la faisabilité réelle, les séquences de fabrication et les risques atelier.",
-      L3: "Exécute ou prépare le dossier de fabrication avec les instructions et les retours production.",
-    },
-    CND: {
-      L1: "Définit les zones critiques, les méthodes de contrôle candidates et les exigences qualité.",
-      L2: "Vérifie l’accessibilité contrôle, les zones non contrôlables et la criticité défauts.",
-      L3: "Fige les procédures de contrôle, les critères d’acceptation et les PV qualité.",
-    },
-  };
-
-  const statusByLOD: Record<LOD, NodeStatus> = {
-    L1: "valide",
-    L2: "en_cours",
-    L3: "non_demarre",
-  };
-
-  nodes.push({
-    id: "produit",
-    label: "Produit / Sous-produit",
-    entity: "TRANSVERSE",
-    type: "produit",
-    x: CX,
-    y: CY,
-    maturity: 45,
-    status: "en_cours",
-    description:
-      "Objet pivot partagé par toutes les entités. Le produit porte la maturité globale, les décisions, les preuves et les risques.",
-  });
-
-  nodes.push(
-    {
-      id: "zone_critique",
-      label: "Zone critique",
-      entity: "TRANSVERSE",
-      type: "zone",
-      x: CX,
-      y: CY - 90,
-      maturity: 55,
-      status: "en_cours",
-      description:
-        "Zone du produit à surveiller car elle concentre des enjeux de conception, simulation, fabrication ou contrôle.",
-    },
-    {
-      id: "interface",
-      label: "Interface produit",
-      entity: "TRANSVERSE",
-      type: "interface",
-      x: CX + 155,
-      y: CY - 10,
-      maturity: 50,
-      status: "en_cours",
-      description:
-        "Interface fonctionnelle ou physique impactant plusieurs métiers.",
-    },
-    {
-      id: "parametre",
-      label: "Paramètre clé",
-      entity: "TRANSVERSE",
-      type: "parametre",
-      x: CX - 150,
-      y: CY - 10,
-      maturity: 60,
-      status: "en_cours",
-      description:
-        "Paramètre de conception partagé entre CAO, méthodes, simulation, fabrication ou contrôle.",
-    },
-    {
-      id: "risque_cnd",
-      label: "Risque accessibilité CND",
-      entity: "TRANSVERSE",
-      type: "risque",
-      x: CX - 250,
-      y: CY + 175,
-      maturity: 10,
-      status: "bloque",
-      description:
-        "Risque identifié : une zone produit pourrait être difficile ou impossible à contrôler.",
-    },
-    {
-      id: "decision_rdc",
-      label: "Décision RdC",
-      entity: "TRANSVERSE",
-      type: "decision",
-      x: CX,
-      y: CY + 230,
-      maturity: 100,
-      status: "valide",
-      description:
-        "Décision de revue de conception permettant de corriger, valider ou bloquer une orientation technique.",
-    },
-    {
-      id: "preuve_numerique",
-      label: "Preuve numérique",
-      entity: "TRANSVERSE",
-      type: "preuve",
-      x: CX + 250,
-      y: CY + 175,
-      maturity: 75,
-      status: "en_cours",
-      description:
-        "Preuve issue d’un rapport simulation, d’une gamme validée, d’un PV contrôle ou d’un fichier technique.",
-    },
-    {
-      id: "validation_lod",
-      label: "Validation LOD",
-      entity: "TRANSVERSE",
-      type: "validation",
-      x: CX + 315,
-      y: CY + 30,
-      maturity: 70,
-      status: "en_cours",
-      description:
-        "Point de passage entre L1, L2 et L3. La validation dépend des preuves et des correspondances métiers.",
-    }
-  );
-
-  for (const entity of Object.keys(entityAngles) as Exclude<Entity, "TRANSVERSE">[]) {
-    for (const lod of ["L1", "L2", "L3"] as LOD[]) {
-      const pos = polar(CX, CY, lodRadius[lod], entityAngles[entity]);
-
-      let status = statusByLOD[lod];
-      let maturity = lod === "L1" ? 100 : lod === "L2" ? 55 : 20;
-
-      if (entity === "CND" && lod === "L2") {
-        status = "bloque";
-        maturity = 35;
-      }
-
-      if (entity === "BE" && lod === "L2") {
-        maturity = 70;
-      }
-
-      nodes.push({
-        id: `${entity}_${lod}`,
-        label: lodLabels[entity][lod],
-        entity,
-        lod,
-        type: "entite_lod",
-        x: pos.x,
-        y: pos.y,
-        maturity,
-        status,
-        description: descriptions[entity][lod],
-      });
-    }
-  }
-
-  let edgeCount = 0;
   const addEdge = (
     source: string,
     target: string,
@@ -337,9 +293,9 @@ function buildGraph() {
     criticality: Criticality = "moyenne",
     bidirectional = false
   ) => {
-    edgeCount += 1;
+    edgeIndex += 1;
     edges.push({
-      id: `e_${edgeCount}`,
+      id: `E_${edgeIndex}`,
       source,
       target,
       type,
@@ -349,70 +305,329 @@ function buildGraph() {
     });
   };
 
-  for (const entity of Object.keys(entityAngles) as Exclude<Entity, "TRANSVERSE">[]) {
-    addEdge("produit", `${entity}_L1`, "alimente", "cadrage métier", "moyenne");
-    addEdge(`${entity}_L1`, `${entity}_L2`, "alimente", "passage L1 → L2", "moyenne");
-    addEdge(`${entity}_L2`, `${entity}_L3`, "valide", "passage L2 → L3", "forte");
+  nodes.push({
+    id: "PROCESS_GLOBAL",
+    label: "Processus global",
+    subtitle: "Pièce + HP + GPE synchronisés",
+    entity: "TRANSVERSE",
+    category: "process",
+    x: WIDTH / 2,
+    y: 76,
+    maturity: 55,
+    status: "en_cours",
+    description:
+      "Architecture globale du processus. Les trois piliers Pièce, HP et GPE sont toujours considérés ensemble, avec une lecture LOD1, LOD2 et LOD3.",
+    functions: [
+      {
+        title: "Structurer la continuité numérique",
+        detail: "Le produit est suivi par pilier, par LOD et par métier.",
+      },
+      {
+        title: "Maintenir la synchronisation",
+        detail: "Pièce, HP et GPE doivent avancer ensemble pour éviter les désalignements.",
+      },
+      {
+        title: "Piloter les correspondances métiers",
+        detail: "BE, BM, SIM, FA et CND contribuent à chaque niveau de détail.",
+      },
+    ],
+  });
+
+  for (const lod of LODS) {
+    nodes.push({
+      id: `SYNC_${lod}`,
+      label: `Synchro ${lod}`,
+      subtitle: "Pièce + HP + GPE",
+      entity: "TRANSVERSE",
+      lod,
+      category: "gate",
+      x: 96,
+      y: LOD_Y[lod],
+      maturity: maturityByLOD(lod),
+      status: statusByLOD(lod),
+      description:
+        "Point de synchronisation transverse. Aucun pilier ne doit être traité seul : Pièce, HP et GPE doivent être alignés au même LOD.",
+      functions: [
+        {
+          title: "Synchroniser les piliers",
+          detail: "Vérifier que Pièce, HP et GPE possèdent le même niveau de maturité.",
+        },
+        {
+          title: "Identifier les écarts",
+          detail: "Détecter les piliers en retard, bloqués ou insuffisamment justifiés.",
+        },
+        {
+          title: "Préparer le passage LOD",
+          detail: "Garantir que tous les métiers ont contribué avant le changement de niveau.",
+        },
+      ],
+    });
+
+    addEdge("PROCESS_GLOBAL", `SYNC_${lod}`, "structure", `cadre ${lod}`, "moyenne");
   }
 
-  addEdge("produit", "zone_critique", "alimente", "porte la zone critique", "forte");
-  addEdge("produit", "interface", "alimente", "porte les interfaces", "moyenne");
-  addEdge("produit", "parametre", "alimente", "porte les paramètres", "moyenne");
+  for (const pillar of PILLARS) {
+    nodes.push({
+      id: `PILLAR_${pillar}`,
+      label: PILLAR_LABELS[pillar],
+      subtitle: "Pilier processus",
+      entity: "TRANSVERSE",
+      pillar,
+      category: "pillar_hub",
+      x: PILLAR_X[pillar],
+      y: 76,
+      maturity: 55,
+      status: "en_cours",
+      description: `Pilier ${PILLAR_LABELS[pillar]} du processus global. Ce pilier doit être analysé avec les deux autres piliers, jamais isolément.`,
+      functions: [
+        {
+          title: "Porter la maturité pilier",
+          detail: `Suivre les contributions LOD1, LOD2 et LOD3 du pilier ${PILLAR_LABELS[pillar]}.`,
+        },
+        {
+          title: "Croiser les métiers",
+          detail: "BE, BM, SIM, FA et CND apportent chacun leurs fonctions.",
+        },
+        {
+          title: "Assurer la cohérence globale",
+          detail: "Les décisions prises sur ce pilier peuvent impacter les autres piliers.",
+        },
+      ],
+    });
 
-  addEdge("BE_L1", "BM_L1", "correspond", "fonction ↔ procédé", "moyenne", true);
-  addEdge("BE_L1", "SIM_L1", "correspond", "fonction ↔ phénomène", "moyenne", true);
-  addEdge("BE_L1", "CND_L1", "correspond", "fonction ↔ zones critiques", "moyenne", true);
+    addEdge("PROCESS_GLOBAL", `PILLAR_${pillar}`, "structure", `pilier ${PILLAR_LABELS[pillar]}`, "forte");
+  }
 
-  addEdge("BE_L2", "BM_L2", "impacte", "géométrie fabricable", "forte", true);
-  addEdge("BE_L2", "SIM_L2", "simule", "géométrie simulable", "forte", true);
-  addEdge("BE_L2", "CND_L2", "controle", "forme contrôlable", "forte", true);
+  addEdge("PILLAR_PIECE", "PILLAR_HP", "synchronise", "Pièce ↔ HP", "forte", true);
+  addEdge("PILLAR_HP", "PILLAR_GPE", "synchronise", "HP ↔ GPE", "forte", true);
+  addEdge("PILLAR_PIECE", "PILLAR_GPE", "synchronise", "Pièce ↔ GPE", "forte", true);
 
-  addEdge("BM_L2", "FA_L2", "industrialise", "gamme prévisionnelle", "forte", true);
-  addEdge("FA_L2", "CND_L2", "controle", "accessibilité contrôle", "forte", true);
-  addEdge("SIM_L2", "CND_L2", "justifie", "zone sensible calculée", "forte", true);
+  for (const pillar of PILLARS) {
+    for (const lod of LODS) {
+      const hubId = getNodeId(pillar, lod);
 
-  addEdge("BE_L3", "BM_L3", "industrialise", "définition → gamme", "forte");
-  addEdge("BM_L3", "FA_L3", "fabrique", "gamme → fabrication", "forte");
-  addEdge("FA_L3", "CND_L3", "controle", "fabrication → contrôle", "forte");
-  addEdge("SIM_L3", "BE_L3", "justifie", "rapport → définition", "forte");
-  addEdge("SIM_L3", "CND_L3", "justifie", "justification zones critiques", "forte");
-  addEdge("BM_L3", "CND_L3", "controle", "plan de contrôle", "forte");
+      nodes.push({
+        id: hubId,
+        label: `${PILLAR_LABELS[pillar]} ${lod}`,
+        subtitle: LOD_LABELS[lod],
+        entity: "TRANSVERSE",
+        pillar,
+        lod,
+        category: "pillar_hub",
+        x: PILLAR_X[pillar],
+        y: LOD_Y[lod],
+        maturity: maturityByLOD(lod),
+        status: statusByLOD(lod),
+        description: `Nœud de synthèse du pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Il agrège les contributions BE, BM, SIM, FA et CND.`,
+        functions: [
+          {
+            title: "Agréger les contributions métiers",
+            detail: "Centraliser les fonctions BE, BM, SIM, FA et CND du même LOD.",
+          },
+          {
+            title: "Préparer la décision de maturité",
+            detail: "Identifier si le pilier peut passer au LOD suivant.",
+          },
+          {
+            title: "Tracer les dépendances",
+            detail: "Afficher les impacts entre métiers et entre piliers.",
+          },
+        ],
+      });
 
-  addEdge("zone_critique", "SIM_L2", "simule", "zone à vérifier", "forte");
-  addEdge("zone_critique", "CND_L2", "controle", "zone à inspecter", "forte");
-  addEdge("interface", "BE_L2", "impacte", "interface CAO", "moyenne");
-  addEdge("interface", "BM_L2", "impacte", "interface process", "moyenne");
-  addEdge("parametre", "BE_L2", "alimente", "paramètre CAO", "forte");
-  addEdge("parametre", "SIM_L2", "alimente", "paramètre calcul", "forte");
-  addEdge("parametre", "BM_L2", "impacte", "paramètre méthodes", "forte");
+      addEdge(`PILLAR_${pillar}`, hubId, "structure", `${PILLAR_LABELS[pillar]} ${lod}`, "moyenne");
+      addEdge(`SYNC_${lod}`, hubId, "synchronise", `alignement ${PILLAR_LABELS[pillar]} ${lod}`, "forte");
 
-  addEdge("CND_L2", "risque_cnd", "bloque", "zone non contrôlable", "forte");
-  addEdge("risque_cnd", "decision_rdc", "justifie", "décision corrective", "forte");
-  addEdge("decision_rdc", "BE_L2", "corrige", "modifier géométrie", "forte");
-  addEdge("decision_rdc", "BM_L2", "corrige", "adapter gamme", "moyenne");
-  addEdge("SIM_L3", "preuve_numerique", "justifie", "rapport simulation", "forte");
-  addEdge("CND_L3", "preuve_numerique", "justifie", "PV contrôle", "forte");
-  addEdge("preuve_numerique", "validation_lod", "valide", "preuve de maturité", "forte");
-  addEdge("validation_lod", "produit", "valide", "maturité produit", "forte");
+      for (const entity of ENTITIES) {
+        const pos = ENTITY_OFFSETS[entity];
+        const nodeId = getNodeId(pillar, lod, entity);
+
+        let status = statusByLOD(lod);
+        let maturity = maturityByLOD(lod);
+
+        if (pillar === "GPE" && lod === "LOD2" && entity === "CND") {
+          status = "bloque";
+          maturity = 35;
+        }
+
+        if (pillar === "PIECE" && lod === "LOD2" && entity === "BE") {
+          maturity = 70;
+        }
+
+        nodes.push({
+          id: nodeId,
+          label: `${entity}`,
+          subtitle: `${PILLAR_LABELS[pillar]} · ${lod}`,
+          entity,
+          pillar,
+          lod,
+          category: "entity_function",
+          x: PILLAR_X[pillar] + pos.dx,
+          y: LOD_Y[lod] + pos.dy,
+          maturity,
+          status,
+          description: `${entity} contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud porte les fonctions métier associées.`,
+          functions: functionsFor(entity, pillar, lod),
+        });
+
+        addEdge(hubId, nodeId, "alimente", `${entity} contribue à ${PILLAR_LABELS[pillar]} ${lod}`, "moyenne");
+      }
+
+      addEdge(getNodeId(pillar, lod, "BE"), getNodeId(pillar, lod, "BM"), "impacte", "BE ↔ BM : conception fabricable", "forte", true);
+      addEdge(getNodeId(pillar, lod, "BE"), getNodeId(pillar, lod, "SIM"), "simule", "BE ↔ SIM : géométrie et hypothèses", "forte", true);
+      addEdge(getNodeId(pillar, lod, "BM"), getNodeId(pillar, lod, "FA"), "industrialise", "BM ↔ FA : gamme et exécution", "forte", true);
+      addEdge(getNodeId(pillar, lod, "FA"), getNodeId(pillar, lod, "CND"), "controle", "FA ↔ CND : fabrication et contrôle", "forte", true);
+      addEdge(getNodeId(pillar, lod, "SIM"), getNodeId(pillar, lod, "CND"), "justifie", "SIM ↔ CND : zones critiques", "forte", true);
+    }
+
+    addEdge(getNodeId(pillar, "LOD1"), getNodeId(pillar, "LOD2"), "construit", "passage LOD1 → LOD2", "forte");
+    addEdge(getNodeId(pillar, "LOD2"), getNodeId(pillar, "LOD3"), "valide", "passage LOD2 → LOD3", "forte");
+
+    for (const entity of ENTITIES) {
+      addEdge(getNodeId(pillar, "LOD1", entity), getNodeId(pillar, "LOD2", entity), "construit", `${entity} LOD1 → LOD2`, "moyenne");
+      addEdge(getNodeId(pillar, "LOD2", entity), getNodeId(pillar, "LOD3", entity), "valide", `${entity} LOD2 → LOD3`, "moyenne");
+    }
+  }
+
+  for (const lod of LODS) {
+    addEdge(getNodeId("PIECE", lod), getNodeId("HP", lod), "synchronise", `Pièce ↔ HP au ${lod}`, "forte", true);
+    addEdge(getNodeId("HP", lod), getNodeId("GPE", lod), "synchronise", `HP ↔ GPE au ${lod}`, "forte", true);
+
+    for (const entity of ENTITIES) {
+      addEdge(getNodeId("PIECE", lod, entity), getNodeId("HP", lod, entity), "synchronise", `${entity} : Pièce ↔ HP`, "moyenne", true);
+      addEdge(getNodeId("HP", lod, entity), getNodeId("GPE", lod, entity), "synchronise", `${entity} : HP ↔ GPE`, "moyenne", true);
+    }
+  }
+
+  nodes.push(
+    {
+      id: "RISK_DESALIGNEMENT",
+      label: "Risque désalignement",
+      subtitle: "Pièce / HP / GPE",
+      entity: "TRANSVERSE",
+      category: "risk",
+      x: 1500,
+      y: 408,
+      maturity: 15,
+      status: "bloque",
+      description:
+        "Risque principal de cette architecture : un pilier ou un métier avance sans correspondance équivalente dans les autres piliers.",
+      functions: [
+        {
+          title: "Détecter les écarts de maturité",
+          detail: "Comparer les états LOD1, LOD2 et LOD3 entre Pièce, HP et GPE.",
+        },
+        {
+          title: "Identifier les métiers bloquants",
+          detail: "Exemple : CND bloqué sur GPE LOD2 à cause d’une accessibilité contrôle insuffisante.",
+        },
+        {
+          title: "Éviter les décisions locales",
+          detail: "Empêcher une validation isolée qui ne serait pas cohérente avec les autres piliers.",
+        },
+      ],
+    },
+    {
+      id: "DECISION_ARBITRAGE",
+      label: "Décision arbitrage",
+      subtitle: "Revue de conception",
+      entity: "TRANSVERSE",
+      category: "decision",
+      x: 1500,
+      y: 560,
+      maturity: 70,
+      status: "en_cours",
+      description:
+        "Décision transverse permettant d’arbitrer entre contraintes BE, BM, SIM, FA et CND sur les trois piliers.",
+      functions: [
+        {
+          title: "Arbitrer les conflits",
+          detail: "Décider entre performance produit, fabricabilité, simulation, fabrication et contrôle.",
+        },
+        {
+          title: "Définir les actions correctives",
+          detail: "Réorienter un pilier, un métier ou un niveau LOD.",
+        },
+        {
+          title: "Tracer la décision",
+          detail: "Associer la décision aux preuves numériques et aux fonctions métier impactées.",
+        },
+      ],
+    },
+    {
+      id: "PROOF_MATURITY",
+      label: "Preuve maturité",
+      subtitle: "LOD3 / validation",
+      entity: "TRANSVERSE",
+      category: "proof",
+      x: 1500,
+      y: 712,
+      maturity: 65,
+      status: "en_cours",
+      description:
+        "Ensemble de preuves permettant de justifier la maturité du processus : CAO libérée, gamme, calculs, fabrication et PV contrôle.",
+      functions: [
+        {
+          title: "Rassembler les preuves",
+          detail: "Plans, CAO, rapports simulation, gammes, PV CND, décisions RdC.",
+        },
+        {
+          title: "Justifier le passage LOD3",
+          detail: "Valider que chaque pilier dispose de preuves suffisantes.",
+        },
+        {
+          title: "Alimenter la continuité numérique",
+          detail: "Créer un lien exploitable entre données produit, processus et décisions.",
+        },
+      ],
+    }
+  );
+
+  addEdge(getNodeId("GPE", "LOD2", "CND"), "RISK_DESALIGNEMENT", "bloque", "CND GPE LOD2 bloqué", "forte");
+  addEdge("RISK_DESALIGNEMENT", "DECISION_ARBITRAGE", "decisionne", "arbitrage nécessaire", "forte");
+  addEdge("DECISION_ARBITRAGE", getNodeId("GPE", "LOD2", "BE"), "impacte", "retour vers définition", "forte");
+  addEdge("DECISION_ARBITRAGE", getNodeId("GPE", "LOD2", "BM"), "impacte", "retour vers gamme", "forte");
+  addEdge(getNodeId("PIECE", "LOD3", "SIM"), "PROOF_MATURITY", "justifie", "rapport simulation", "moyenne");
+  addEdge(getNodeId("HP", "LOD3", "BM"), "PROOF_MATURITY", "justifie", "gamme validée", "moyenne");
+  addEdge(getNodeId("GPE", "LOD3", "CND"), "PROOF_MATURITY", "justifie", "PV contrôle", "moyenne");
+  addEdge("PROOF_MATURITY", "PROCESS_GLOBAL", "valide", "preuve de maturité globale", "forte");
 
   return { nodes, edges };
+}
+
+function nodeRadius(node: GraphNode) {
+  if (node.category === "process") return 52;
+  if (node.category === "pillar_hub") return 42;
+  if (node.category === "gate") return 38;
+  if (node.category === "risk" || node.category === "decision" || node.category === "proof") return 40;
+  return 31;
+}
+
+function nodeFill(node: GraphNode) {
+  if (node.category === "pillar_hub" && node.pillar) return PILLAR_COLORS[node.pillar];
+  if (node.category === "gate") return "#e5e7eb";
+  if (node.category === "risk") return "#ef4444";
+  if (node.category === "decision") return "#facc15";
+  if (node.category === "proof") return "#a78bfa";
+  return ENTITY_COLORS[node.entity];
 }
 
 export default function ViewerPage() {
   const { nodes, edges } = useMemo(() => buildGraph(), []);
 
-  const [selectedNodeId, setSelectedNodeId] = useState<string>("produit");
+  const [selectedNodeId, setSelectedNodeId] = useState<string>("PROCESS_GLOBAL");
+  const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
   const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
   const [entityFilter, setEntityFilter] = useState<Entity | "ALL">("ALL");
   const [relationFilter, setRelationFilter] = useState<RelationType | "ALL">("ALL");
-  const [viewMode, setViewMode] = useState<"global" | "risques" | "preuves" | "lod">("global");
+  const [viewMode, setViewMode] = useState<"global" | "piliers" | "lod" | "fonctions" | "risques">("global");
   const [search, setSearch] = useState("");
 
   const nodeById = useMemo(() => {
     return new Map(nodes.map((node) => [node.id, node]));
   }, [nodes]);
 
-  const selectedNode = selectedNodeId ? nodeById.get(selectedNodeId) : undefined;
+  const selectedNode = nodeById.get(selectedNodeId);
 
   const visibleNodeIds = useMemo(() => {
     const ids = new Set<string>();
@@ -421,48 +636,70 @@ export default function ViewerPage() {
       const matchSearch =
         search.trim().length === 0 ||
         node.label.toLowerCase().includes(search.toLowerCase()) ||
-        node.description.toLowerCase().includes(search.toLowerCase());
+        node.subtitle.toLowerCase().includes(search.toLowerCase()) ||
+        node.description.toLowerCase().includes(search.toLowerCase()) ||
+        node.functions.some(
+          (item) =>
+            item.title.toLowerCase().includes(search.toLowerCase()) ||
+            item.detail.toLowerCase().includes(search.toLowerCase())
+        );
+
+      const matchPillar =
+        pillarFilter === "ALL" ||
+        node.pillar === pillarFilter ||
+        node.category === "process" ||
+        node.category === "gate" ||
+        node.category === "risk" ||
+        node.category === "decision" ||
+        node.category === "proof";
 
       const matchLOD =
         lodFilter === "ALL" ||
         node.lod === lodFilter ||
-        node.type === "produit" ||
-        node.entity === "TRANSVERSE";
+        node.category === "process" ||
+        node.category === "pillar_hub" && !node.lod ||
+        node.category === "risk" ||
+        node.category === "decision" ||
+        node.category === "proof";
 
       const matchEntity =
         entityFilter === "ALL" ||
         node.entity === entityFilter ||
-        node.type === "produit" ||
         node.entity === "TRANSVERSE";
 
       let matchView = true;
 
-      if (viewMode === "risques") {
+      if (viewMode === "piliers") {
         matchView =
-          node.type === "risque" ||
-          node.type === "decision" ||
-          node.status === "bloque" ||
-          node.id === "produit" ||
-          node.id === "validation_lod";
-      }
-
-      if (viewMode === "preuves") {
-        matchView =
-          node.type === "preuve" ||
-          node.type === "validation" ||
-          node.type === "decision" ||
-          node.lod === "L3" ||
-          node.id === "produit";
+          node.category === "process" ||
+          node.category === "pillar_hub" ||
+          node.category === "gate";
       }
 
       if (viewMode === "lod") {
         matchView =
-          node.type === "produit" ||
-          node.entity === "TRANSVERSE" ||
-          node.type === "entite_lod";
+          node.category === "process" ||
+          node.category === "gate" ||
+          Boolean(node.lod);
       }
 
-      if (matchSearch && matchLOD && matchEntity && matchView) {
+      if (viewMode === "fonctions") {
+        matchView =
+          node.category === "process" ||
+          node.category === "pillar_hub" ||
+          node.category === "entity_function";
+      }
+
+      if (viewMode === "risques") {
+        matchView =
+          node.category === "risk" ||
+          node.category === "decision" ||
+          node.category === "proof" ||
+          node.status === "bloque" ||
+          node.id === "PROCESS_GLOBAL";
+      }
+
+      if (matchSearch && matchPillar && matchLOD && matchEntity && matchView) {
         ids.add(node.id);
       }
     }
@@ -476,62 +713,33 @@ export default function ViewerPage() {
       }
     }
 
-    if (viewMode === "preuves") {
-      for (const edge of edges) {
-        if (ids.has(edge.source) || ids.has(edge.target)) {
-          ids.add(edge.source);
-          ids.add(edge.target);
-        }
-      }
-    }
-
     return ids;
-  }, [nodes, edges, search, lodFilter, entityFilter, viewMode]);
+  }, [nodes, edges, search, pillarFilter, lodFilter, entityFilter, viewMode]);
 
   const visibleEdges = useMemo(() => {
     return edges.filter((edge) => {
       const matchRelation = relationFilter === "ALL" || edge.type === relationFilter;
-      return (
-        visibleNodeIds.has(edge.source) &&
-        visibleNodeIds.has(edge.target) &&
-        matchRelation
-      );
+      return visibleNodeIds.has(edge.source) && visibleNodeIds.has(edge.target) && matchRelation;
     });
   }, [edges, visibleNodeIds, relationFilter]);
 
   const connectedNodeIds = useMemo(() => {
-    const set = new Set<string>();
-
-    if (!selectedNodeId) return set;
-
-    set.add(selectedNodeId);
+    const ids = new Set<string>();
+    ids.add(selectedNodeId);
 
     for (const edge of edges) {
-      if (edge.source === selectedNodeId) {
-        set.add(edge.target);
-      }
-      if (edge.target === selectedNodeId) {
-        set.add(edge.source);
-      }
+      if (edge.source === selectedNodeId) ids.add(edge.target);
+      if (edge.target === selectedNodeId) ids.add(edge.source);
     }
 
-    return set;
+    return ids;
   }, [edges, selectedNodeId]);
 
   const connectedEdges = useMemo(() => {
-    if (!selectedNodeId) return [];
-    return edges.filter(
-      (edge) => edge.source === selectedNodeId || edge.target === selectedNodeId
-    );
+    return edges.filter((edge) => edge.source === selectedNodeId || edge.target === selectedNodeId);
   }, [edges, selectedNodeId]);
 
   const visibleNodes = nodes.filter((node) => visibleNodeIds.has(node.id));
-
-  function nodeRadius(node: GraphNode) {
-    if (node.type === "produit") return 44;
-    if (node.entity === "TRANSVERSE") return 34;
-    return 38;
-  }
 
   function nodeOpacity(node: GraphNode) {
     if (!selectedNodeId) return 1;
@@ -540,78 +748,82 @@ export default function ViewerPage() {
   }
 
   function edgeOpacity(edge: GraphEdge) {
-    if (!selectedNodeId) return 0.7;
+    if (!selectedNodeId) return 0.68;
     if (edge.source === selectedNodeId || edge.target === selectedNodeId) return 1;
     if (connectedNodeIds.has(edge.source) && connectedNodeIds.has(edge.target)) return 0.35;
     return 0.08;
   }
 
   function resetFilters() {
+    setPillarFilter("ALL");
     setLodFilter("ALL");
     setEntityFilter("ALL");
     setRelationFilter("ALL");
     setViewMode("global");
     setSearch("");
-    setSelectedNodeId("produit");
+    setSelectedNodeId("PROCESS_GLOBAL");
   }
 
   return (
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Architecture réseau V0</p>
-          <h1>Correspondances BE / BM / SIM / FA / CND par LOD</h1>
+          <p className="eyebrow">Mini-PLM · Viewer réseau V0.1</p>
+          <h1>Architecture Pièce / HP / GPE × LOD × Métiers × Fonctions</h1>
         </div>
 
         <div className="toolbar">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Rechercher un nœud..."
+            placeholder="Rechercher..."
           />
 
           <select value={viewMode} onChange={(event) => setViewMode(event.target.value as any)}>
             <option value="global">Vue globale</option>
+            <option value="piliers">Vue piliers</option>
             <option value="lod">Vue LOD</option>
-            <option value="risques">Vue risques</option>
-            <option value="preuves">Vue preuves</option>
+            <option value="fonctions">Vue fonctions</option>
+            <option value="risques">Vue risques / preuves</option>
+          </select>
+
+          <select value={pillarFilter} onChange={(event) => setPillarFilter(event.target.value as any)}>
+            <option value="ALL">Tous piliers</option>
+            <option value="PIECE">Pièce</option>
+            <option value="HP">HP</option>
+            <option value="GPE">GPE</option>
           </select>
 
           <select value={lodFilter} onChange={(event) => setLodFilter(event.target.value as any)}>
             <option value="ALL">Tous LOD</option>
-            <option value="L1">LOD L1</option>
-            <option value="L2">LOD L2</option>
-            <option value="L3">LOD L3</option>
+            <option value="LOD1">LOD1</option>
+            <option value="LOD2">LOD2</option>
+            <option value="LOD3">LOD3</option>
           </select>
 
-          <select
-            value={entityFilter}
-            onChange={(event) => setEntityFilter(event.target.value as any)}
-          >
-            <option value="ALL">Toutes entités</option>
+          <select value={entityFilter} onChange={(event) => setEntityFilter(event.target.value as any)}>
+            <option value="ALL">Tous métiers</option>
             <option value="BE">BE</option>
             <option value="BM">BM</option>
             <option value="SIM">SIM</option>
             <option value="FA">FA</option>
             <option value="CND">CND</option>
-            <option value="TRANSVERSE">Transverse</option>
           </select>
 
-          <select
-            value={relationFilter}
-            onChange={(event) => setRelationFilter(event.target.value as any)}
-          >
+          <select value={relationFilter} onChange={(event) => setRelationFilter(event.target.value as any)}>
             <option value="ALL">Toutes relations</option>
+            <option value="structure">structure</option>
+            <option value="synchronise">synchronise</option>
             <option value="alimente">alimente</option>
             <option value="impacte">impacte</option>
-            <option value="correspond">correspond</option>
-            <option value="simule">simule</option>
-            <option value="industrialise">industrialise</option>
-            <option value="controle">controle</option>
+            <option value="construit">construit</option>
+            <option value="valide">valide</option>
             <option value="bloque">bloque</option>
             <option value="justifie">justifie</option>
-            <option value="corrige">corrige</option>
-            <option value="valide">valide</option>
+            <option value="controle">controle</option>
+            <option value="industrialise">industrialise</option>
+            <option value="simule">simule</option>
+            <option value="decisionne">decisionne</option>
           </select>
 
           <button onClick={resetFilters}>Réinitialiser</button>
@@ -635,7 +847,7 @@ export default function ViewerPage() {
               </marker>
 
               <filter id="nodeGlow" x="-60%" y="-60%" width="220%" height="220%">
-                <feGaussianBlur stdDeviation="3.5" result="coloredBlur" />
+                <feGaussianBlur stdDeviation="4" result="coloredBlur" />
                 <feMerge>
                   <feMergeNode in="coloredBlur" />
                   <feMergeNode in="SourceGraphic" />
@@ -643,19 +855,31 @@ export default function ViewerPage() {
               </filter>
             </defs>
 
-            <circle cx={CX} cy={CY} r="160" className="lodRing" />
-            <circle cx={CX} cy={CY} r="295" className="lodRing" />
-            <circle cx={CX} cy={CY} r="430" className="lodRing" />
+            {PILLARS.map((pillar) => (
+              <g key={`col_${pillar}`}>
+                <rect
+                  x={PILLAR_X[pillar] - 190}
+                  y={126}
+                  width={380}
+                  height={780}
+                  rx={30}
+                  className="pillarZone"
+                  stroke={PILLAR_COLORS[pillar]}
+                />
+                <text x={PILLAR_X[pillar]} y={148} textAnchor="middle" className="pillarTitle">
+                  {PILLAR_LABELS[pillar]}
+                </text>
+              </g>
+            ))}
 
-            <text x={CX + 15} y={CY - 165} className="ringLabel">
-              L1 · Cadrage
-            </text>
-            <text x={CX + 15} y={CY - 300} className="ringLabel">
-              L2 · Convergence
-            </text>
-            <text x={CX + 15} y={CY - 435} className="ringLabel">
-              L3 · Validation
-            </text>
+            {LODS.map((lod) => (
+              <g key={`row_${lod}`}>
+                <line x1={55} y1={LOD_Y[lod]} x2={1545} y2={LOD_Y[lod]} className="lodLine" />
+                <text x={64} y={LOD_Y[lod] - 52} className="lodLabel">
+                  {LOD_LABELS[lod]}
+                </text>
+              </g>
+            ))}
 
             {visibleEdges.map((edge) => {
               const source = nodeById.get(edge.source);
@@ -673,7 +897,7 @@ export default function ViewerPage() {
                     x2={target.x}
                     y2={target.y}
                     stroke={color}
-                    strokeWidth={edge.criticality === "forte" ? 2.3 : 1.4}
+                    strokeWidth={edge.criticality === "forte" ? 2.2 : 1.35}
                     strokeDasharray={edge.bidirectional ? "5 6" : undefined}
                     markerEnd={edge.bidirectional ? undefined : "url(#arrow)"}
                   />
@@ -684,7 +908,7 @@ export default function ViewerPage() {
             {visibleNodes.map((node) => {
               const radius = nodeRadius(node);
               const selected = selectedNodeId === node.id;
-              const labelLines = wrapLabel(node.label, node.type === "produit" ? 22 : 17);
+              const labelLines = wrapLabel(node.label, node.category === "entity_function" ? 8 : 16);
 
               return (
                 <g
@@ -697,16 +921,16 @@ export default function ViewerPage() {
                 >
                   <circle
                     r={radius}
-                    fill={ENTITY_COLORS[node.entity]}
+                    fill={nodeFill(node)}
                     stroke={selected ? "#ffffff" : STATUS_COLORS[node.status]}
                     strokeWidth={selected ? 4 : 3}
                   />
 
                   <circle
-                    r={radius - 8}
+                    r={radius - 7}
                     fill="transparent"
                     stroke="rgba(15,23,42,0.55)"
-                    strokeWidth="7"
+                    strokeWidth="6"
                     strokeDasharray={`${Math.max(node.maturity, 1)} ${100 - Math.max(node.maturity, 1)}`}
                     pathLength="100"
                     transform="rotate(-90)"
@@ -715,7 +939,7 @@ export default function ViewerPage() {
                   <text className="nodeText" textAnchor="middle">
                     {labelLines.map((line, index) => (
                       <tspan
-                        key={`${node.id}_${line}_${index}`}
+                        key={`${node.id}_${index}`}
                         x="0"
                         y={(index - (labelLines.length - 1) / 2) * 12}
                       >
@@ -736,16 +960,14 @@ export default function ViewerPage() {
             {selectedNode ? (
               <>
                 <div className="selectedHeader">
-                  <span
-                    className="dot"
-                    style={{ background: ENTITY_COLORS[selectedNode.entity] }}
-                  />
+                  <span className="dot" style={{ background: nodeFill(selectedNode) }} />
                   <div>
                     <h2>{selectedNode.label}</h2>
                     <p>
-                      {selectedNode.entity}
-                      {selectedNode.lod ? ` · ${selectedNode.lod}` : ""} ·{" "}
-                      {selectedNode.type}
+                      {selectedNode.subtitle}
+                      {selectedNode.pillar ? ` · ${PILLAR_LABELS[selectedNode.pillar]}` : ""}
+                      {selectedNode.lod ? ` · ${selectedNode.lod}` : ""}
+                      {selectedNode.entity !== "TRANSVERSE" ? ` · ${ENTITY_LABELS[selectedNode.entity]}` : ""}
                     </p>
                   </div>
                 </div>
@@ -779,6 +1001,23 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
+            <p className="panelLabel">Fonctions métier</p>
+
+            {selectedNode?.functions?.length ? (
+              <div className="functionList">
+                {selectedNode.functions.map((item, index) => (
+                  <div key={`${selectedNode.id}_function_${index}`} className="functionItem">
+                    <strong>{item.title}</strong>
+                    <p>{item.detail}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="empty">Aucune fonction associée.</p>
+            )}
+          </div>
+
+          <div className="panelBlock">
             <p className="panelLabel">Relations directes</p>
 
             <div className="edgeList">
@@ -797,10 +1036,7 @@ export default function ViewerPage() {
                         setSelectedNodeId(edge.source === selectedNodeId ? edge.target : edge.source)
                       }
                     >
-                      <span
-                        className="relationColor"
-                        style={{ background: RELATION_COLORS[edge.type] }}
-                      />
+                      <span className="relationColor" style={{ background: RELATION_COLORS[edge.type] }} />
                       <span>
                         <strong>{edge.type}</strong>
                         <small>
@@ -816,21 +1052,23 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture du modèle</p>
+            <p className="panelLabel">Lecture V0.1</p>
 
             <ul className="readingList">
               <li>
-                <strong>L1</strong> : cadrage métier et hypothèses fortes.
+                <strong>Colonnes</strong> : les 3 piliers Pièce, HP et GPE.
               </li>
               <li>
-                <strong>L2</strong> : convergence entre conception, méthodes,
-                simulation, fabrication et contrôle.
+                <strong>Lignes</strong> : LOD1, LOD2 et LOD3.
               </li>
               <li>
-                <strong>L3</strong> : définition validée, preuves, dossier et PV.
+                <strong>Bulles métier</strong> : BE, BM, SIM, FA et CND.
               </li>
               <li>
-                Les liens orange/rouge montrent les impacts ou blocages critiques.
+                <strong>Liens cyan</strong> : synchronisation entre piliers.
+              </li>
+              <li>
+                <strong>Liens orange / rouges</strong> : impacts et blocages critiques.
               </li>
             </ul>
           </div>
@@ -841,8 +1079,8 @@ export default function ViewerPage() {
         .viewerPage {
           min-height: 100vh;
           background:
-            radial-gradient(circle at 20% 20%, rgba(59, 130, 246, 0.16), transparent 30%),
-            radial-gradient(circle at 80% 10%, rgba(168, 85, 247, 0.14), transparent 28%),
+            radial-gradient(circle at 20% 18%, rgba(14, 165, 233, 0.16), transparent 30%),
+            radial-gradient(circle at 78% 12%, rgba(168, 85, 247, 0.14), transparent 28%),
             #020617;
           color: #e5e7eb;
           padding: 22px;
@@ -870,14 +1108,14 @@ export default function ViewerPage() {
           font-size: 12px;
           text-transform: uppercase;
           letter-spacing: 0.14em;
-          font-weight: 700;
+          font-weight: 800;
         }
 
         h1 {
           margin: 0;
           font-size: 25px;
           line-height: 1.2;
-          font-weight: 750;
+          font-weight: 780;
           color: #f8fafc;
         }
 
@@ -886,14 +1124,14 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 860px;
+          max-width: 970px;
         }
 
         .toolbar input,
         .toolbar select,
         .toolbar button {
           border: 1px solid rgba(148, 163, 184, 0.28);
-          background: rgba(15, 23, 42, 0.82);
+          background: rgba(15, 23, 42, 0.84);
           color: #e5e7eb;
           border-radius: 12px;
           padding: 10px 11px;
@@ -902,24 +1140,24 @@ export default function ViewerPage() {
         }
 
         .toolbar input {
-          width: 210px;
+          width: 180px;
         }
 
         .toolbar button {
           cursor: pointer;
-          font-weight: 700;
-          background: rgba(37, 99, 235, 0.35);
+          font-weight: 800;
+          background: rgba(37, 99, 235, 0.34);
         }
 
         .layout {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 370px;
+          grid-template-columns: minmax(0, 1fr) 390px;
           gap: 18px;
           align-items: stretch;
         }
 
         .graphCard {
-          min-height: 760px;
+          min-height: 790px;
           border: 1px solid rgba(148, 163, 184, 0.18);
           border-radius: 24px;
           overflow: hidden;
@@ -934,21 +1172,34 @@ export default function ViewerPage() {
         .graphSvg {
           width: 100%;
           height: 100%;
-          min-height: 760px;
+          min-height: 790px;
           display: block;
         }
 
-        .lodRing {
-          fill: none;
-          stroke: rgba(203, 213, 225, 0.12);
-          stroke-width: 1.3;
+        .pillarZone {
+          fill: rgba(15, 23, 42, 0.2);
+          stroke-width: 1.5;
+          stroke-opacity: 0.32;
           stroke-dasharray: 8 8;
         }
 
-        .ringLabel {
-          fill: rgba(226, 232, 240, 0.52);
+        .pillarTitle {
+          fill: rgba(248, 250, 252, 0.82);
+          font-size: 18px;
+          font-weight: 850;
+          letter-spacing: 0.04em;
+        }
+
+        .lodLine {
+          stroke: rgba(203, 213, 225, 0.1);
+          stroke-width: 1.2;
+          stroke-dasharray: 8 10;
+        }
+
+        .lodLabel {
+          fill: rgba(226, 232, 240, 0.56);
           font-size: 13px;
-          font-weight: 700;
+          font-weight: 800;
         }
 
         .nodeGroup {
@@ -960,7 +1211,7 @@ export default function ViewerPage() {
           pointer-events: none;
           fill: #020617;
           font-size: 10px;
-          font-weight: 850;
+          font-weight: 900;
           letter-spacing: -0.02em;
         }
 
@@ -972,7 +1223,7 @@ export default function ViewerPage() {
 
         .panelBlock {
           border: 1px solid rgba(148, 163, 184, 0.2);
-          background: rgba(15, 23, 42, 0.82);
+          background: rgba(15, 23, 42, 0.84);
           border-radius: 22px;
           padding: 16px;
           box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
@@ -981,7 +1232,7 @@ export default function ViewerPage() {
         .panelLabel {
           margin: 0 0 12px 0;
           font-size: 11px;
-          font-weight: 800;
+          font-weight: 850;
           color: #93c5fd;
           text-transform: uppercase;
           letter-spacing: 0.13em;
@@ -1060,11 +1311,41 @@ export default function ViewerPage() {
           border-radius: 999px;
         }
 
+        .functionList {
+          display: flex;
+          flex-direction: column;
+          gap: 9px;
+          max-height: 245px;
+          overflow: auto;
+          padding-right: 4px;
+        }
+
+        .functionItem {
+          border: 1px solid rgba(148, 163, 184, 0.15);
+          background: rgba(2, 6, 23, 0.42);
+          border-radius: 14px;
+          padding: 10px;
+        }
+
+        .functionItem strong {
+          display: block;
+          color: #f8fafc;
+          font-size: 13px;
+          margin-bottom: 4px;
+        }
+
+        .functionItem p {
+          margin: 0;
+          color: #cbd5e1;
+          font-size: 12.5px;
+          line-height: 1.45;
+        }
+
         .edgeList {
           display: flex;
           flex-direction: column;
           gap: 8px;
-          max-height: 315px;
+          max-height: 265px;
           overflow: auto;
           padding-right: 4px;
         }
@@ -1133,7 +1414,7 @@ export default function ViewerPage() {
           color: #f8fafc;
         }
 
-        @media (max-width: 1180px) {
+        @media (max-width: 1240px) {
           .topbar {
             flex-direction: column;
           }
@@ -1144,10 +1425,6 @@ export default function ViewerPage() {
 
           .layout {
             grid-template-columns: 1fr;
-          }
-
-          .sidePanel {
-            grid-row: 2;
           }
         }
       `}</style>
