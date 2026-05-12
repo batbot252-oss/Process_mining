@@ -45,7 +45,8 @@ type BubbleFamily =
   | "BE_SUB"
   | "BM_SUB"
   | "SIMULATION"
-  | "OUTIL";
+  | "OUTIL"
+  | "LIBRE";
 
 type Position = {
   x: number;
@@ -77,8 +78,8 @@ type BubbleOverride = {
 const WIDTH = 1600;
 const HEIGHT = 980;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v1";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v1";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v2";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v2";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -189,6 +190,7 @@ const FAMILY_COLORS: Record<BubbleFamily, string> = {
   BM_SUB: "#f59e0b",
   SIMULATION: "#a78bfa",
   OUTIL: "#38bdf8",
+  LIBRE: "#facc15",
 };
 
 const PILLAR_COLORS: Record<Pillar, string> = {
@@ -215,7 +217,8 @@ function labelForFamilyValue(family: BubbleFamily, value: string) {
   if (family === "OUTIL") return TOOL_LABELS[value as ToolName];
   if (family === "BE_SUB") return BE_SUB_TRADE_LABELS[value as BeSubTrade];
   if (family === "BM_SUB") return BM_SUB_TRADE_LABELS[value as BmSubTrade];
-  return SIM_SUB_TRADE_LABELS[value as SimSubTrade];
+  if (family === "SIMULATION") return SIM_SUB_TRADE_LABELS[value as SimSubTrade];
+  return value;
 }
 
 function colorForFamilyValue(family: BubbleFamily, value: string) {
@@ -228,7 +231,8 @@ function subtitleForFamilyValue(family: BubbleFamily, lod: LOD) {
   if (family === "OUTIL") return `${lod} · Outil`;
   if (family === "BE_SUB") return `${lod} · Sous-métier BE`;
   if (family === "BM_SUB") return `${lod} · Sous-métier BM`;
-  return `${lod} · Sous-métier SIM`;
+  if (family === "SIMULATION") return `${lod} · Sous-métier SIM`;
+  return `${lod} · Bulle libre`;
 }
 
 function descriptionForFamilyValue(
@@ -254,7 +258,11 @@ function descriptionForFamilyValue(
     return `Sous-métier BM : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle méthodes.`;
   }
 
-  return `Sous-métier SIM : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle simulation.`;
+  if (family === "SIMULATION") {
+    return `Sous-métier SIM : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle simulation.`;
+  }
+
+  return `Bulle libre : ${label}. Cette bulle appartient à l’onglet ${lod}, avec un texte et une couleur personnalisés.`;
 }
 
 function getOptionsForFamily(family: BubbleFamily) {
@@ -286,14 +294,18 @@ function getOptionsForFamily(family: BubbleFamily) {
     }));
   }
 
-  return SIM_SUB_TRADES.map((subTrade) => ({
-    value: subTrade,
-    label: SIM_SUB_TRADE_LABELS[subTrade],
-  }));
+  if (family === "SIMULATION") {
+    return SIM_SUB_TRADES.map((subTrade) => ({
+      value: subTrade,
+      label: SIM_SUB_TRADE_LABELS[subTrade],
+    }));
+  }
+
+  return [];
 }
 
 function bubbleWidth(label: string) {
-  return clamp(label.length * 8 + 42, 70, 172);
+  return clamp(label.length * 8 + 42, 70, 220);
 }
 
 function getToolInitialBubblePosition(index: number): Position {
@@ -426,6 +438,8 @@ export default function ViewerPage() {
   const [newBubbleFamily, setNewBubbleFamily] =
     useState<BubbleFamily>("METIER");
   const [newBubbleValue, setNewBubbleValue] = useState<string>("BE");
+  const [freeBubbleText, setFreeBubbleText] = useState<string>("Nouvelle bulle");
+  const [freeBubbleColor, setFreeBubbleColor] = useState<string>("#facc15");
 
   const allBaseBubbles = useMemo(() => {
     return [...defaultBubbles, ...customBubbles];
@@ -486,6 +500,8 @@ export default function ViewerPage() {
   }, [customBubbles]);
 
   useEffect(() => {
+    if (newBubbleFamily === "LIBRE") return;
+
     const firstOption = getOptionsForFamily(newBubbleFamily)[0];
 
     if (firstOption) {
@@ -641,8 +657,15 @@ export default function ViewerPage() {
   }
 
   function addCustomBubble() {
-    const label = labelForFamilyValue(newBubbleFamily, newBubbleValue);
-    const color = colorForFamilyValue(newBubbleFamily, newBubbleValue);
+    const isFreeBubble = newBubbleFamily === "LIBRE";
+    const rawLabel = isFreeBubble ? freeBubbleText.trim() : newBubbleValue;
+    const label = isFreeBubble
+      ? rawLabel || "Bulle libre"
+      : labelForFamilyValue(newBubbleFamily, newBubbleValue);
+    const color = isFreeBubble
+      ? freeBubbleColor
+      : colorForFamilyValue(newBubbleFamily, newBubbleValue);
+
     const index = customBubbles.filter((bubble) => bubble.lod === activeLod).length;
 
     const id = `CUSTOM_${activeLod}_${Date.now()}_${Math.round(
@@ -658,11 +681,9 @@ export default function ViewerPage() {
       x: 1460,
       y: 205 + (index % 12) * 48,
       color,
-      description: descriptionForFamilyValue(
-        newBubbleFamily,
-        newBubbleValue,
-        activeLod
-      ),
+      description: isFreeBubble
+        ? descriptionForFamilyValue("LIBRE", label, activeLod)
+        : descriptionForFamilyValue(newBubbleFamily, newBubbleValue, activeLod),
       visibleDefault: true,
       isCustom: true,
     };
@@ -770,6 +791,8 @@ export default function ViewerPage() {
     setPillarFilter("ALL");
     setActiveLod("LOD1");
     setSelectedBubbleId("LOD1_PIECE_BE");
+    setFreeBubbleText("Nouvelle bulle");
+    setFreeBubbleColor("#facc15");
 
     window.localStorage.removeItem(LS_BUBBLE_OVERRIDES);
     window.localStorage.removeItem(LS_CUSTOM_BUBBLES);
@@ -786,8 +809,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.5</p>
-          <h1>Placement libre par LOD avec sous-métiers BE / BM / SIM</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V0.6</p>
+          <h1>Placement libre par LOD avec bulles personnalisées</h1>
         </div>
 
         <div className="toolbar">
@@ -809,6 +832,7 @@ export default function ViewerPage() {
             <option value="BM_SUB">Sous-métiers BM</option>
             <option value="SIMULATION">Sous-métiers SIM</option>
             <option value="OUTIL">Outils</option>
+            <option value="LIBRE">Bulles libres</option>
           </select>
 
           <select
@@ -1052,7 +1076,13 @@ export default function ViewerPage() {
           <div className="panelBlock">
             <p className="panelLabel">Ajouter une bulle libre dans {activeLod}</p>
 
-            <div className="addBubbleGrid">
+            <div
+              className={
+                newBubbleFamily === "LIBRE"
+                  ? "addBubbleGrid addBubbleGridFree"
+                  : "addBubbleGrid"
+              }
+            >
               <select
                 value={newBubbleFamily}
                 onChange={(event) =>
@@ -1064,25 +1094,43 @@ export default function ViewerPage() {
                 <option value="BM_SUB">Sous-métier BM</option>
                 <option value="SIMULATION">Sous-métier SIM</option>
                 <option value="OUTIL">Outil</option>
+                <option value="LIBRE">Texte libre</option>
               </select>
 
-              <select
-                value={newBubbleValue}
-                onChange={(event) => setNewBubbleValue(event.target.value)}
-              >
-                {newBubbleOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
+              {newBubbleFamily === "LIBRE" ? (
+                <>
+                  <input
+                    value={freeBubbleText}
+                    onChange={(event) => setFreeBubbleText(event.target.value)}
+                    placeholder="Texte de la bulle..."
+                  />
+
+                  <input
+                    type="color"
+                    value={freeBubbleColor}
+                    onChange={(event) => setFreeBubbleColor(event.target.value)}
+                    title="Couleur de la bulle"
+                  />
+                </>
+              ) : (
+                <select
+                  value={newBubbleValue}
+                  onChange={(event) => setNewBubbleValue(event.target.value)}
+                >
+                  {newBubbleOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              )}
 
               <button onClick={addCustomBubble}>Ajouter</button>
             </div>
 
             <p className="hint">
-              La bulle ajoutée est créée uniquement dans l’onglet {activeLod}.
-              Tu peux ajouter plusieurs fois Aéro, Méca, Out, CAO, Inj_C, etc.
+              Tu peux ajouter une bulle standard ou une bulle texte libre avec
+              sa propre couleur. Elle sera créée uniquement dans l’onglet {activeLod}.
             </p>
           </div>
 
@@ -1158,7 +1206,7 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.5</p>
+            <p className="panelLabel">Lecture V0.6</p>
 
             <ul className="readingList">
               <li>
@@ -1177,7 +1225,7 @@ export default function ViewerPage() {
                 <strong>Sous-métiers SIM</strong> : Inj_C, Inj_N, Pré_chau, Sdf.
               </li>
               <li>
-                <strong>Placement</strong> : positions sauvegardées séparément pour chaque LOD.
+                <strong>Texte libre</strong> : création de bulles personnalisées avec couleur au choix.
               </li>
             </ul>
           </div>
@@ -1239,6 +1287,7 @@ export default function ViewerPage() {
         .toolbar input,
         .toolbar select,
         .toolbar button,
+        .addBubbleGrid input,
         .addBubbleGrid select,
         .addBubbleGrid button,
         .selectedActions button,
@@ -1251,6 +1300,14 @@ export default function ViewerPage() {
           padding: 10px 11px;
           font-size: 13px;
           outline: none;
+        }
+
+        .addBubbleGrid input[type="color"] {
+          width: 58px;
+          min-width: 58px;
+          height: 40px;
+          padding: 4px;
+          cursor: pointer;
         }
 
         .toolbar input {
@@ -1555,6 +1612,10 @@ export default function ViewerPage() {
           gap: 8px;
         }
 
+        .addBubbleGridFree {
+          grid-template-columns: 1fr 1.3fr 64px auto;
+        }
+
         .hint {
           color: #94a3b8;
           margin: 10px 0 0 0;
@@ -1676,7 +1737,8 @@ export default function ViewerPage() {
             grid-template-columns: 1fr;
           }
 
-          .addBubbleGrid {
+          .addBubbleGrid,
+          .addBubbleGridFree {
             grid-template-columns: 1fr;
           }
 
