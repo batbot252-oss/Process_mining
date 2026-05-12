@@ -23,6 +23,8 @@ type ToolName =
   | "ERP"
   | "CIVA";
 
+type SimulationJob = "INJ_C" | "INJ_N" | "PRE_CHAUF" | "SDF";
+
 type NodeCategory =
   | "process"
   | "pillar_hub"
@@ -71,6 +73,7 @@ type GraphNode = {
   description: string;
   functions: FunctionItem[];
   tools?: ToolName[];
+  simulationJobs?: SimulationJob[];
 };
 
 type GraphEdge = {
@@ -124,6 +127,20 @@ const TOOL_LABELS: Record<ToolName, string> = {
   MES: "MES / Atelier",
   ERP: "ERP",
   CIVA: "CIVA / CND",
+};
+
+const SIMULATION_JOBS: SimulationJob[] = [
+  "INJ_C",
+  "INJ_N",
+  "PRE_CHAUF",
+  "SDF",
+];
+
+const SIMULATION_JOB_LABELS: Record<SimulationJob, string> = {
+  INJ_C: "Inj_c",
+  INJ_N: "Inj_n",
+  PRE_CHAUF: "Pré_chauf",
+  SDF: "SDF",
 };
 
 const PILLAR_LABELS: Record<Pillar, string> = {
@@ -364,38 +381,43 @@ function functionsFor(
           detail: `Phénomènes à vérifier sur le pilier ${pillarLabel}.`,
         },
         {
-          title: "Définir les critères calcul",
-          detail: "Critères de performance, marges, zones critiques.",
+          title: "Cadrer Inj_c / Inj_n",
+          detail:
+            "Première lecture des besoins de simulation injection côté courant et côté noyau.",
         },
         {
           title: "Préparer la stratégie simulation",
-          detail: "Niveau de modèle attendu selon la maturité LOD.",
+          detail:
+            "Niveau de modèle attendu selon la maturité LOD et les métiers simulation concernés.",
         },
       ],
       LOD2: [
         {
           title: "Construire le modèle intermédiaire",
           detail:
-            "Modèle simplifié ou semi-détaillé, hypothèses et maillage.",
+            "Modèle simplifié ou semi-détaillé, hypothèses, maillage et préparation calcul.",
         },
         {
           title: "Comparer les variantes",
           detail:
-            "Analyse de sensibilité, paramètres influents, orientation de conception.",
+            "Analyse de sensibilité sur Inj_c, Inj_n et Pré_chauf selon le besoin du pilier.",
         },
         {
           title: "Identifier les zones sensibles",
-          detail: "Zones critiques à partager avec BE, BM et CND.",
+          detail:
+            "Zones critiques à partager avec BE, BM, FA et CND.",
         },
       ],
       LOD3: [
         {
           title: "Produire le rapport validé",
-          detail: "Calculs finaux, marges, justification et traçabilité.",
+          detail:
+            "Calculs finaux, marges, justification et traçabilité sur Inj_c, Inj_n, Pré_chauf et SDF.",
         },
         {
           title: "Justifier la définition",
-          detail: "Lien entre résultats, CAO libérée et décision RdC.",
+          detail:
+            "Lien entre résultats simulation, CAO libérée et décision RdC.",
         },
         {
           title: "Appuyer la preuve numérique",
@@ -573,6 +595,32 @@ function toolsFor(
   return baseTools;
 }
 
+function simulationJobsFor(
+  entity: Exclude<Entity, "TRANSVERSE">,
+  pillar: Pillar,
+  lod: LOD
+): SimulationJob[] {
+  if (entity !== "SIM") return [];
+
+  if (lod === "LOD1") {
+    return ["INJ_C", "INJ_N"];
+  }
+
+  if (lod === "LOD2") {
+    return ["INJ_C", "INJ_N", "PRE_CHAUF"];
+  }
+
+  if (pillar === "PIECE") {
+    return ["INJ_C", "INJ_N", "PRE_CHAUF", "SDF"];
+  }
+
+  if (pillar === "HP") {
+    return ["INJ_C", "PRE_CHAUF", "SDF"];
+  }
+
+  return ["INJ_N", "PRE_CHAUF", "SDF"];
+}
+
 function buildGraph() {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
@@ -663,7 +711,13 @@ function buildGraph() {
       tools: ["3DEXPERIENCE", "Excel", "Power BI"],
     });
 
-    addEdge("PROCESS_GLOBAL", `SYNC_${lod}`, "structure", `cadre ${lod}`, "moyenne");
+    addEdge(
+      "PROCESS_GLOBAL",
+      `SYNC_${lod}`,
+      "structure",
+      `cadre ${lod}`,
+      "moyenne"
+    );
   }
 
   for (const pillar of PILLARS) {
@@ -706,9 +760,32 @@ function buildGraph() {
     );
   }
 
-  addEdge("PILLAR_PIECE", "PILLAR_HP", "synchronise", "Pièce ↔ HP", "forte", true);
-  addEdge("PILLAR_HP", "PILLAR_GPE", "synchronise", "HP ↔ GPE", "forte", true);
-  addEdge("PILLAR_PIECE", "PILLAR_GPE", "synchronise", "Pièce ↔ GPE", "forte", true);
+  addEdge(
+    "PILLAR_PIECE",
+    "PILLAR_HP",
+    "synchronise",
+    "Pièce ↔ HP",
+    "forte",
+    true
+  );
+
+  addEdge(
+    "PILLAR_HP",
+    "PILLAR_GPE",
+    "synchronise",
+    "HP ↔ GPE",
+    "forte",
+    true
+  );
+
+  addEdge(
+    "PILLAR_PIECE",
+    "PILLAR_GPE",
+    "synchronise",
+    "Pièce ↔ GPE",
+    "forte",
+    true
+  );
 
   for (const pillar of PILLARS) {
     for (const lod of LODS) {
@@ -777,6 +854,8 @@ function buildGraph() {
           maturity = 70;
         }
 
+        const simulationJobs = simulationJobsFor(entity, pillar, lod);
+
         nodes.push({
           id: nodeId,
           label: `${entity}`,
@@ -789,9 +868,13 @@ function buildGraph() {
           y: LOD_Y[lod] + pos.dy,
           maturity,
           status,
-          description: `${entity} contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud porte les fonctions métier associées.`,
+          description:
+            entity === "SIM"
+              ? `SIM contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud regroupe les métiers simulation associés : Inj_c, Inj_n, Pré_chauf et SDF selon le niveau de maturité.`
+              : `${entity} contribue au pilier ${PILLAR_LABELS[pillar]} au niveau ${lod}. Ce nœud porte les fonctions métier associées.`,
           functions: functionsFor(entity, pillar, lod),
           tools: toolsFor(entity, pillar, lod),
+          simulationJobs,
         });
 
         addEdge(
@@ -1090,6 +1173,7 @@ function nodeRadius(node: GraphNode) {
   if (node.category === "process") return 52;
   if (node.category === "pillar_hub") return 42;
   if (node.category === "gate") return 38;
+
   if (
     node.category === "risk" ||
     node.category === "decision" ||
@@ -1097,6 +1181,7 @@ function nodeRadius(node: GraphNode) {
   ) {
     return 40;
   }
+
   return 31;
 }
 
@@ -1121,7 +1206,12 @@ export default function ViewerPage() {
   const [lodFilter, setLodFilter] = useState<LOD | "ALL">("ALL");
   const [entityFilter, setEntityFilter] = useState<Entity | "ALL">("ALL");
   const [toolFilter, setToolFilter] = useState<ToolName | "ALL">("ALL");
-  const [relationFilter, setRelationFilter] = useState<RelationType | "ALL">("ALL");
+  const [simulationJobFilter, setSimulationJobFilter] = useState<
+    SimulationJob | "ALL"
+  >("ALL");
+  const [relationFilter, setRelationFilter] = useState<RelationType | "ALL">(
+    "ALL"
+  );
   const [viewMode, setViewMode] = useState<
     "global" | "piliers" | "lod" | "fonctions" | "risques"
   >("global");
@@ -1149,7 +1239,16 @@ export default function ViewerPage() {
             item.title.toLowerCase().includes(searchValue) ||
             item.detail.toLowerCase().includes(searchValue)
         ) ||
-        node.tools?.some((tool) => TOOL_LABELS[tool].toLowerCase().includes(searchValue));
+        Boolean(
+          node.tools?.some((tool) =>
+            TOOL_LABELS[tool].toLowerCase().includes(searchValue)
+          )
+        ) ||
+        Boolean(
+          node.simulationJobs?.some((job) =>
+            SIMULATION_JOB_LABELS[job].toLowerCase().includes(searchValue)
+          )
+        );
 
       const matchPillar =
         pillarFilter === "ALL" ||
@@ -1176,7 +1275,17 @@ export default function ViewerPage() {
 
       const matchTool =
         toolFilter === "ALL" ||
-        node.tools?.includes(toolFilter) ||
+        Boolean(node.tools?.includes(toolFilter)) ||
+        node.category === "process" ||
+        node.category === "pillar_hub" ||
+        node.category === "gate" ||
+        node.category === "risk" ||
+        node.category === "decision" ||
+        node.category === "proof";
+
+      const matchSimulationJob =
+        simulationJobFilter === "ALL" ||
+        Boolean(node.simulationJobs?.includes(simulationJobFilter)) ||
         node.category === "process" ||
         node.category === "pillar_hub" ||
         node.category === "gate" ||
@@ -1222,6 +1331,7 @@ export default function ViewerPage() {
         matchLOD &&
         matchEntity &&
         matchTool &&
+        matchSimulationJob &&
         matchView
       ) {
         ids.add(node.id);
@@ -1246,12 +1356,14 @@ export default function ViewerPage() {
     lodFilter,
     entityFilter,
     toolFilter,
+    simulationJobFilter,
     viewMode,
   ]);
 
   const visibleEdges = useMemo(() => {
     return edges.filter((edge) => {
-      const matchRelation = relationFilter === "ALL" || edge.type === relationFilter;
+      const matchRelation =
+        relationFilter === "ALL" || edge.type === relationFilter;
 
       return (
         visibleNodeIds.has(edge.source) &&
@@ -1290,9 +1402,11 @@ export default function ViewerPage() {
   function edgeOpacity(edge: GraphEdge) {
     if (!selectedNodeId) return 0.68;
     if (edge.source === selectedNodeId || edge.target === selectedNodeId) return 1;
+
     if (connectedNodeIds.has(edge.source) && connectedNodeIds.has(edge.target)) {
       return 0.35;
     }
+
     return 0.08;
   }
 
@@ -1301,6 +1415,7 @@ export default function ViewerPage() {
     setLodFilter("ALL");
     setEntityFilter("ALL");
     setToolFilter("ALL");
+    setSimulationJobFilter("ALL");
     setRelationFilter("ALL");
     setViewMode("global");
     setSearch("");
@@ -1312,7 +1427,9 @@ export default function ViewerPage() {
       <section className="topbar">
         <div>
           <p className="eyebrow">Mini-PLM · Viewer réseau V0.1</p>
-          <h1>Architecture Pièce / HP / GPE × LOD × Métiers × Outils</h1>
+          <h1>
+            Architecture Pièce / HP / GPE × LOD × Métiers × Outils × Simulation
+          </h1>
         </div>
 
         <div className="toolbar">
@@ -1344,7 +1461,9 @@ export default function ViewerPage() {
 
           <select
             value={pillarFilter}
-            onChange={(event) => setPillarFilter(event.target.value as Pillar | "ALL")}
+            onChange={(event) =>
+              setPillarFilter(event.target.value as Pillar | "ALL")
+            }
           >
             <option value="ALL">Tous piliers</option>
             <option value="PIECE">Pièce</option>
@@ -1364,7 +1483,9 @@ export default function ViewerPage() {
 
           <select
             value={entityFilter}
-            onChange={(event) => setEntityFilter(event.target.value as Entity | "ALL")}
+            onChange={(event) =>
+              setEntityFilter(event.target.value as Entity | "ALL")
+            }
           >
             <option value="ALL">Tous métiers</option>
             <option value="BE">BE</option>
@@ -1384,6 +1505,22 @@ export default function ViewerPage() {
             {TOOLS.map((tool) => (
               <option key={tool} value={tool}>
                 {TOOL_LABELS[tool]}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={simulationJobFilter}
+            onChange={(event) =>
+              setSimulationJobFilter(
+                event.target.value as SimulationJob | "ALL"
+              )
+            }
+          >
+            <option value="ALL">Tous métiers SIM</option>
+            {SIMULATION_JOBS.map((job) => (
+              <option key={job} value={job}>
+                {SIMULATION_JOB_LABELS[job]}
               </option>
             ))}
           </select>
@@ -1449,7 +1586,12 @@ export default function ViewerPage() {
                   className="pillarZone"
                   stroke={PILLAR_COLORS[pillar]}
                 />
-                <text x={PILLAR_X[pillar]} y={148} textAnchor="middle" className="pillarTitle">
+                <text
+                  x={PILLAR_X[pillar]}
+                  y={148}
+                  textAnchor="middle"
+                  className="pillarTitle"
+                >
                   {PILLAR_LABELS[pillar]}
                 </text>
               </g>
@@ -1457,7 +1599,13 @@ export default function ViewerPage() {
 
             {LODS.map((lod) => (
               <g key={`row_${lod}`}>
-                <line x1={55} y1={LOD_Y[lod]} x2={1545} y2={LOD_Y[lod]} className="lodLine" />
+                <line
+                  x1={55}
+                  y1={LOD_Y[lod]}
+                  x2={1545}
+                  y2={LOD_Y[lod]}
+                  className="lodLine"
+                />
                 <text x={64} y={LOD_Y[lod] - 52} className="lodLabel">
                   {LOD_LABELS[lod]}
                 </text>
@@ -1548,12 +1696,17 @@ export default function ViewerPage() {
             {selectedNode ? (
               <>
                 <div className="selectedHeader">
-                  <span className="dot" style={{ background: nodeFill(selectedNode) }} />
+                  <span
+                    className="dot"
+                    style={{ background: nodeFill(selectedNode) }}
+                  />
                   <div>
                     <h2>{selectedNode.label}</h2>
                     <p>
                       {selectedNode.subtitle}
-                      {selectedNode.pillar ? ` · ${PILLAR_LABELS[selectedNode.pillar]}` : ""}
+                      {selectedNode.pillar
+                        ? ` · ${PILLAR_LABELS[selectedNode.pillar]}`
+                        : ""}
                       {selectedNode.lod ? ` · ${selectedNode.lod}` : ""}
                       {selectedNode.entity !== "TRANSVERSE"
                         ? ` · ${ENTITY_LABELS[selectedNode.entity]}`
@@ -1596,7 +1749,10 @@ export default function ViewerPage() {
             {selectedNode?.functions?.length ? (
               <div className="functionList">
                 {selectedNode.functions.map((item, index) => (
-                  <div key={`${selectedNode.id}_function_${index}`} className="functionItem">
+                  <div
+                    key={`${selectedNode.id}_function_${index}`}
+                    className="functionItem"
+                  >
                     <strong>{item.title}</strong>
                     <p>{item.detail}</p>
                   </div>
@@ -1624,6 +1780,27 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
+            <p className="panelLabel">Métiers simulation</p>
+
+            {selectedNode?.simulationJobs?.length ? (
+              <div className="simulationJobList">
+                {selectedNode.simulationJobs.map((job) => (
+                  <span
+                    key={`${selectedNode.id}_${job}`}
+                    className="simulationJobChip"
+                  >
+                    {SIMULATION_JOB_LABELS[job]}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="empty">
+                Aucun métier simulation directement associé à ce nœud.
+              </p>
+            )}
+          </div>
+
+          <div className="panelBlock">
             <p className="panelLabel">Relations directes</p>
 
             <div className="edgeList">
@@ -1640,7 +1817,9 @@ export default function ViewerPage() {
                       className="edgeItem"
                       onClick={() =>
                         setSelectedNodeId(
-                          edge.source === selectedNodeId ? edge.target : edge.source
+                          edge.source === selectedNodeId
+                            ? edge.target
+                            : edge.source
                         )
                       }
                     >
@@ -1676,13 +1855,18 @@ export default function ViewerPage() {
                 <strong>Bulles métier</strong> : BE, BM, SIM, FA et CND.
               </li>
               <li>
-                <strong>Filtre outil</strong> : 3DEXPERIENCE, CATIA, ABAQUS, ANSA, Python, etc.
+                <strong>Outils</strong> : 3DEXPERIENCE, CATIA, ABAQUS, ANSA,
+                Python, etc.
+              </li>
+              <li>
+                <strong>Métiers SIM</strong> : Inj_c, Inj_n, Pré_chauf et SDF.
               </li>
               <li>
                 <strong>Liens cyan</strong> : synchronisation entre piliers.
               </li>
               <li>
-                <strong>Liens orange / rouges</strong> : impacts et blocages critiques.
+                <strong>Liens orange / rouges</strong> : impacts et blocages
+                critiques.
               </li>
             </ul>
           </div>
@@ -1738,7 +1922,7 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 1050px;
+          max-width: 1160px;
         }
 
         .toolbar input,
@@ -1955,7 +2139,8 @@ export default function ViewerPage() {
           line-height: 1.45;
         }
 
-        .toolList {
+        .toolList,
+        .simulationJobList {
           display: flex;
           flex-wrap: wrap;
           gap: 8px;
@@ -1967,6 +2152,18 @@ export default function ViewerPage() {
           border: 1px solid rgba(147, 197, 253, 0.32);
           background: rgba(30, 64, 175, 0.22);
           color: #dbeafe;
+          border-radius: 999px;
+          padding: 7px 10px;
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        .simulationJobChip {
+          display: inline-flex;
+          align-items: center;
+          border: 1px solid rgba(167, 139, 250, 0.38);
+          background: rgba(88, 28, 135, 0.26);
+          color: #ede9fe;
           border-radius: 999px;
           padding: 7px 10px;
           font-size: 12px;
