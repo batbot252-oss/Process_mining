@@ -97,8 +97,8 @@ type ResolvedBubbleLink = BubbleLink & {
   target: BubbleView;
 };
 
-const WIDTH = 1600;
-const HEIGHT = 980;
+const WIDTH = 2400;
+const HEIGHT = 1300;
 
 const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v5";
 const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v5";
@@ -226,9 +226,9 @@ const PILLAR_FRAMES: Record<
   Pillar,
   { x: number; y: number; w: number; h: number }
 > = {
-  PIECE: { x: 170, y: 185, w: 400, h: 690 },
-  HP: { x: 600, y: 185, w: 400, h: 690 },
-  GPE: { x: 1030, y: 185, w: 400, h: 690 },
+  PIECE: { x: 180, y: 210, w: 660, h: 950 },
+  HP: { x: 890, y: 210, w: 660, h: 950 },
+  GPE: { x: 1600, y: 210, w: 660, h: 950 },
 };
 
 function clamp(value: number, min: number, max: number) {
@@ -336,8 +336,8 @@ function getToolInitialBubblePosition(index: number): Position {
   const row = Math.floor(index / 5);
 
   return {
-    x: 1130 + col * 72,
-    y: 260 + row * 48,
+    x: 1800 + col * 96,
+    y: 340 + row * 60,
   };
 }
 
@@ -356,8 +356,8 @@ function buildDefaultBubbles(): Bubble[] {
           family: "METIER",
           pillar,
           lod,
-          x: frame.x + 65 + index * 68,
-          y: frame.y + 95,
+          x: frame.x + 95 + index * 110,
+          y: frame.y + 110,
           color: ENTITY_COLORS[entity],
           description: `${entity} associé par défaut au pilier ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}. Cette bulle reste librement déplaçable.`,
           visibleDefault: true,
@@ -372,8 +372,8 @@ function buildDefaultBubbles(): Bubble[] {
           family: "BE_SUB",
           pillar,
           lod,
-          x: frame.x + 58 + index * 78,
-          y: frame.y + 165,
+          x: frame.x + 80 + index * 115,
+          y: frame.y + 190,
           color: FAMILY_COLORS.BE_SUB,
           description: `Sous-métier BE ${BE_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
@@ -388,8 +388,8 @@ function buildDefaultBubbles(): Bubble[] {
           family: "BM_SUB",
           pillar,
           lod,
-          x: frame.x + 110 + index * 95,
-          y: frame.y + 225,
+          x: frame.x + 130 + index * 125,
+          y: frame.y + 270,
           color: FAMILY_COLORS.BM_SUB,
           description: `Sous-métier BM ${BM_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
@@ -404,8 +404,8 @@ function buildDefaultBubbles(): Bubble[] {
           family: "SIMULATION",
           pillar,
           lod,
-          x: frame.x + 74 + index * 82,
-          y: frame.y + 285,
+          x: frame.x + 95 + index * 125,
+          y: frame.y + 350,
           color: FAMILY_COLORS.SIMULATION,
           description: `Sous-métier SIM ${SIM_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
@@ -821,8 +821,8 @@ export default function ViewerPage() {
       subtitle: subtitleForFamilyValue(newBubbleFamily, activeLod),
       family: newBubbleFamily,
       lod: activeLod,
-      x: 1460,
-      y: 205 + (index % 12) * 48,
+      x: 2265,
+      y: 260 + (index % 14) * 56,
       color,
       description: isFreeBubble
         ? descriptionForFamilyValue("LIBRE", label, activeLod)
@@ -1035,8 +1035,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V1.0</p>
-          <h1>Placement libre par LOD avec création de liens corrigée</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V1.1</p>
+          <h1>Placement libre par LOD avec grands cadres Pièce / HP / GPE</h1>
         </div>
 
         <div className="toolbar">
@@ -1174,18 +1174,18 @@ export default function ViewerPage() {
 
             <rect
               x={120}
-              y={145}
-              width={1350}
-              height={755}
-              rx={28}
+              y={170}
+              width={2220}
+              height={1040}
+              rx={36}
               className="activeLodBand"
             />
 
-            <text x={55} y={478} className="lodMainLabel">
+            <text x={55} y={675} className="lodMainLabel">
               {LOD_LABELS[activeLod]}
             </text>
 
-            <text x={55} y={506} className="lodSubLabel">
+            <text x={55} y={705} className="lodSubLabel">
               {LOD_DETAILS[activeLod]}
             </text>
 
@@ -1199,14 +1199,14 @@ export default function ViewerPage() {
                     y={frame.y}
                     width={frame.w}
                     height={frame.h}
-                    rx={28}
+                    rx={34}
                     className="pillarFrame"
                     stroke={PILLAR_COLORS[pillar]}
                   />
 
                   <text
                     x={frame.x + frame.w / 2}
-                    y={frame.y - 20}
+                    y={frame.y - 26}
                     textAnchor="middle"
                     className="pillarTitle"
                   >
@@ -1651,23 +1651,23 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V1.0</p>
+            <p className="panelLabel">Lecture V1.1</p>
 
             <ul className="readingList">
               <li>
-                <strong>Sélection lien corrigée</strong> : un clic sur une bulle remplit directement Bulle 1 puis Bulle 2.
+                <strong>Cadres agrandis</strong> : Pièce, HP et GPE sont beaucoup plus larges.
               </li>
               <li>
-                <strong>Mode lien</strong> : utile pour bloquer le déplacement pendant la création des liens.
+                <strong>Zone de travail élargie</strong> : le viewer accepte davantage de bulles.
               </li>
               <li>
-                <strong>Créer lien</strong> : crée un lien de la bulle 1 vers la bulle 2.
+                <strong>Défilement horizontal</strong> : disponible si l’écran est trop petit.
               </li>
               <li>
-                <strong>Casser lien</strong> : supprime tous les liens entre les deux bulles sélectionnées.
+                <strong>Liens</strong> : les liens continuent à suivre les bulles déplacées.
               </li>
               <li>
-                <strong>Bibliothèque</strong> : cliquer une bulle dans la bibliothèque la sélectionne aussi pour le lien.
+                <strong>Fonctions conservées</strong> : ajout, suppression, affichage, masquage et texte libre.
               </li>
             </ul>
           </div>
@@ -1856,10 +1856,10 @@ export default function ViewerPage() {
         }
 
         .graphCard {
-          min-height: 790px;
+          min-height: 860px;
           border: 1px solid rgba(148, 163, 184, 0.18);
           border-radius: 24px;
-          overflow: hidden;
+          overflow: auto;
           background:
             linear-gradient(rgba(148, 163, 184, 0.04) 1px, transparent 1px),
             linear-gradient(90deg, rgba(148, 163, 184, 0.04) 1px, transparent 1px),
@@ -1869,9 +1869,10 @@ export default function ViewerPage() {
         }
 
         .graphSvg {
-          width: 100%;
-          height: 100%;
-          min-height: 790px;
+          width: max(100%, 1900px);
+          min-width: 1900px;
+          height: 860px;
+          min-height: 860px;
           display: block;
           touch-action: none;
         }
@@ -1892,27 +1893,27 @@ export default function ViewerPage() {
 
         .pillarFrame {
           fill: rgba(15, 23, 42, 0.22);
-          stroke-width: 1.8;
-          stroke-opacity: 0.48;
-          stroke-dasharray: 10 8;
+          stroke-width: 1.9;
+          stroke-opacity: 0.5;
+          stroke-dasharray: 12 9;
         }
 
         .pillarTitle {
-          fill: rgba(248, 250, 252, 0.88);
-          font-size: 21px;
+          fill: rgba(248, 250, 252, 0.92);
+          font-size: 23px;
           font-weight: 900;
           letter-spacing: 0.05em;
         }
 
         .lodMainLabel {
           fill: #f8fafc;
-          font-size: 22px;
+          font-size: 24px;
           font-weight: 900;
         }
 
         .lodSubLabel {
           fill: #94a3b8;
-          font-size: 13px;
+          font-size: 14px;
           font-weight: 700;
         }
 
@@ -2343,6 +2344,11 @@ export default function ViewerPage() {
 
           .lodTabs {
             grid-template-columns: 1fr;
+          }
+
+          .graphSvg {
+            width: 1800px;
+            min-width: 1800px;
           }
         }
       `}</style>
