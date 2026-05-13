@@ -56,6 +56,18 @@ type Position = {
   y: number;
 };
 
+type PillarFrame = {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+};
+
+type PillarFrameSize = {
+  w: number;
+  h: number;
+};
+
 type Bubble = {
   id: string;
   label: string;
@@ -97,12 +109,13 @@ type ResolvedBubbleLink = BubbleLink & {
   target: BubbleView;
 };
 
-const WIDTH = 2400;
-const HEIGHT = 1300;
+const WIDTH = 2700;
+const HEIGHT = 1400;
 
 const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v5";
 const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v5";
 const LS_BUBBLE_LINKS = "plm_free_bubble_links_v3";
+const LS_PILLAR_FRAME_SIZES = "plm_pillar_frame_sizes_v1";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -222,14 +235,22 @@ const PILLAR_COLORS: Record<Pillar, string> = {
   GPE: "#c084fc",
 };
 
-const PILLAR_FRAMES: Record<
-  Pillar,
-  { x: number; y: number; w: number; h: number }
-> = {
+const BASE_PILLAR_FRAMES: Record<Pillar, PillarFrame> = {
   PIECE: { x: 180, y: 210, w: 660, h: 950 },
   HP: { x: 890, y: 210, w: 660, h: 950 },
   GPE: { x: 1600, y: 210, w: 660, h: 950 },
 };
+
+const DEFAULT_PILLAR_FRAME_SIZES: Record<Pillar, PillarFrameSize> = {
+  PIECE: { w: 660, h: 950 },
+  HP: { w: 660, h: 950 },
+  GPE: { w: 660, h: 950 },
+};
+
+const MIN_FRAME_WIDTH = 420;
+const MAX_FRAME_WIDTH = 980;
+const MIN_FRAME_HEIGHT = 600;
+const MAX_FRAME_HEIGHT = 1120;
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -346,7 +367,7 @@ function buildDefaultBubbles(): Bubble[] {
 
   for (const lod of LODS) {
     for (const pillar of PILLARS) {
-      const frame = PILLAR_FRAMES[pillar];
+      const frame = BASE_PILLAR_FRAMES[pillar];
 
       ENTITIES.forEach((entity, index) => {
         bubbles.push({
@@ -450,6 +471,16 @@ export default function ViewerPage() {
   >({});
   const [bubbleLinks, setBubbleLinks] = useState<BubbleLink[]>([]);
 
+  const [pillarFrameSizes, setPillarFrameSizes] = useState<
+    Record<Pillar, PillarFrameSize>
+  >(DEFAULT_PILLAR_FRAME_SIZES);
+
+  const [selectedFramePillar, setSelectedFramePillar] =
+    useState<Pillar>("PIECE");
+
+  const [showLodTabs, setShowLodTabs] = useState(true);
+  const [showSidePanel, setShowSidePanel] = useState(true);
+
   const [selectedBubbleId, setSelectedBubbleId] = useState<string>(
     "LOD1_PIECE_BE"
   );
@@ -470,6 +501,20 @@ export default function ViewerPage() {
 
   const [linkLabel, setLinkLabel] = useState<string>("Lien");
   const [linkColor, setLinkColor] = useState<string>("#cbd5e1");
+
+  const computedPillarFrames = useMemo(() => {
+    const frames = {} as Record<Pillar, PillarFrame>;
+
+    for (const pillar of PILLARS) {
+      frames[pillar] = {
+        ...BASE_PILLAR_FRAMES[pillar],
+        w: pillarFrameSizes[pillar].w,
+        h: pillarFrameSizes[pillar].h,
+      };
+    }
+
+    return frames;
+  }, [pillarFrameSizes]);
 
   const allBaseBubbles = useMemo(() => {
     return [...defaultBubbles, ...customBubbles];
@@ -498,6 +543,7 @@ export default function ViewerPage() {
       const rawOverrides = window.localStorage.getItem(LS_BUBBLE_OVERRIDES);
       const rawCustomBubbles = window.localStorage.getItem(LS_CUSTOM_BUBBLES);
       const rawLinks = window.localStorage.getItem(LS_BUBBLE_LINKS);
+      const rawFrameSizes = window.localStorage.getItem(LS_PILLAR_FRAME_SIZES);
 
       if (rawOverrides) {
         setBubbleOverrides(
@@ -512,10 +558,17 @@ export default function ViewerPage() {
       if (rawLinks) {
         setBubbleLinks(JSON.parse(rawLinks) as BubbleLink[]);
       }
+
+      if (rawFrameSizes) {
+        setPillarFrameSizes(
+          JSON.parse(rawFrameSizes) as Record<Pillar, PillarFrameSize>
+        );
+      }
     } catch {
       setBubbleOverrides({});
       setCustomBubbles([]);
       setBubbleLinks([]);
+      setPillarFrameSizes(DEFAULT_PILLAR_FRAME_SIZES);
     } finally {
       storageLoadedRef.current = true;
     }
@@ -544,6 +597,15 @@ export default function ViewerPage() {
 
     window.localStorage.setItem(LS_BUBBLE_LINKS, JSON.stringify(bubbleLinks));
   }, [bubbleLinks]);
+
+  useEffect(() => {
+    if (!storageLoadedRef.current) return;
+
+    window.localStorage.setItem(
+      LS_PILLAR_FRAME_SIZES,
+      JSON.stringify(pillarFrameSizes)
+    );
+  }, [pillarFrameSizes]);
 
   useEffect(() => {
     if (newBubbleFamily === "LIBRE") return;
@@ -799,6 +861,52 @@ export default function ViewerPage() {
     setFilteredBubblesVisibility(false);
   }
 
+  function updatePillarFrameSize(
+    pillar: Pillar,
+    key: keyof PillarFrameSize,
+    value: number
+  ) {
+    setPillarFrameSizes((previous) => ({
+      ...previous,
+      [pillar]: {
+        ...previous[pillar],
+        [key]:
+          key === "w"
+            ? clamp(value, MIN_FRAME_WIDTH, MAX_FRAME_WIDTH)
+            : clamp(value, MIN_FRAME_HEIGHT, MAX_FRAME_HEIGHT),
+      },
+    }));
+  }
+
+  function adjustSelectedPillarFrame(deltaW: number, deltaH: number) {
+    setPillarFrameSizes((previous) => ({
+      ...previous,
+      [selectedFramePillar]: {
+        w: clamp(
+          previous[selectedFramePillar].w + deltaW,
+          MIN_FRAME_WIDTH,
+          MAX_FRAME_WIDTH
+        ),
+        h: clamp(
+          previous[selectedFramePillar].h + deltaH,
+          MIN_FRAME_HEIGHT,
+          MAX_FRAME_HEIGHT
+        ),
+      },
+    }));
+  }
+
+  function resetSelectedPillarFrame() {
+    setPillarFrameSizes((previous) => ({
+      ...previous,
+      [selectedFramePillar]: DEFAULT_PILLAR_FRAME_SIZES[selectedFramePillar],
+    }));
+  }
+
+  function resetAllPillarFrames() {
+    setPillarFrameSizes(DEFAULT_PILLAR_FRAME_SIZES);
+  }
+
   function addCustomBubble() {
     const isFreeBubble = newBubbleFamily === "LIBRE";
     const rawLabel = isFreeBubble ? freeBubbleText.trim() : newBubbleValue;
@@ -1007,6 +1115,7 @@ export default function ViewerPage() {
     setBubbleOverrides({});
     setCustomBubbles([]);
     setBubbleLinks([]);
+    setPillarFrameSizes(DEFAULT_PILLAR_FRAME_SIZES);
     setSearch("");
     setFamilyFilter("ALL");
     setPillarFilter("ALL");
@@ -1018,10 +1127,13 @@ export default function ViewerPage() {
     setFreeBubbleColor("#facc15");
     setLinkLabel("Lien");
     setLinkColor("#cbd5e1");
+    setShowLodTabs(true);
+    setShowSidePanel(true);
 
     window.localStorage.removeItem(LS_BUBBLE_OVERRIDES);
     window.localStorage.removeItem(LS_CUSTOM_BUBBLES);
     window.localStorage.removeItem(LS_BUBBLE_LINKS);
+    window.localStorage.removeItem(LS_PILLAR_FRAME_SIZES);
   }
 
   const newBubbleOptions = getOptionsForFamily(newBubbleFamily);
@@ -1031,12 +1143,14 @@ export default function ViewerPage() {
   ).length;
   const activeLodTotalCount = activeLodBubbles.length;
 
+  const selectedFrame = pillarFrameSizes[selectedFramePillar];
+
   return (
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V1.1</p>
-          <h1>Placement libre par LOD avec grands cadres Pièce / HP / GPE</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V1.2</p>
+          <h1>Placement libre par LOD avec panneaux repliables et cadres ajustables</h1>
         </div>
 
         <div className="toolbar">
@@ -1089,6 +1203,14 @@ export default function ViewerPage() {
             {linkMode ? "Mode lien actif" : "Mode lien"}
           </button>
 
+          <button onClick={() => setShowLodTabs((current) => !current)}>
+            {showLodTabs ? "Masquer onglets LOD" : "Afficher onglets LOD"}
+          </button>
+
+          <button onClick={() => setShowSidePanel((current) => !current)}>
+            {showSidePanel ? "Masquer panneau" : "Afficher panneau"}
+          </button>
+
           <button onClick={showFilteredBubbles}>Afficher sélection</button>
           <button onClick={hideFilteredBubbles}>Masquer sélection</button>
           <button onClick={resetPositionsForActiveLod}>Réinit. positions LOD</button>
@@ -1096,29 +1218,51 @@ export default function ViewerPage() {
         </div>
       </section>
 
-      <section className="lodTabs">
-        {LODS.map((lod) => {
-          const lodBubbles = bubbles.filter(
-            (bubble) => bubble.lod === lod && !bubble.deleted
-          );
-          const visibleCount = lodBubbles.filter((bubble) => bubble.visible).length;
-          const linkCount = bubbleLinks.filter((link) => link.lod === lod).length;
+      {showLodTabs ? (
+        <section className="lodTabs">
+          {LODS.map((lod) => {
+            const lodBubbles = bubbles.filter(
+              (bubble) => bubble.lod === lod && !bubble.deleted
+            );
+            const visibleCount = lodBubbles.filter((bubble) => bubble.visible).length;
+            const linkCount = bubbleLinks.filter((link) => link.lod === lod).length;
 
-          return (
-            <button
-              key={lod}
-              className={activeLod === lod ? "lodTab lodTabActive" : "lodTab"}
-              onClick={() => changeActiveLod(lod)}
-            >
-              <strong>{LOD_LABELS[lod]}</strong>
-              <span>{LOD_DETAILS[lod]}</span>
-              <em>
-                {visibleCount}/{lodBubbles.length} visibles · {linkCount} lien(s)
-              </em>
-            </button>
-          );
-        })}
-      </section>
+            return (
+              <button
+                key={lod}
+                className={activeLod === lod ? "lodTab lodTabActive" : "lodTab"}
+                onClick={() => changeActiveLod(lod)}
+              >
+                <strong>{LOD_LABELS[lod]}</strong>
+                <span>{LOD_DETAILS[lod]}</span>
+                <em>
+                  {visibleCount}/{lodBubbles.length} visibles · {linkCount} lien(s)
+                </em>
+              </button>
+            );
+          })}
+        </section>
+      ) : (
+        <section className="lodTabsCollapsed">
+          <span>
+            Onglets LOD repliés · Onglet actif : <strong>{activeLod}</strong>
+          </span>
+
+          <div className="compactLodButtons">
+            {LODS.map((lod) => (
+              <button
+                key={lod}
+                className={activeLod === lod ? "compactLodActive" : ""}
+                onClick={() => changeActiveLod(lod)}
+              >
+                {lod}
+              </button>
+            ))}
+          </div>
+
+          <button onClick={() => setShowLodTabs(true)}>Redéployer</button>
+        </section>
+      )}
 
       {linkMode ? (
         <section className="linkModeBanner">
@@ -1127,7 +1271,7 @@ export default function ViewerPage() {
         </section>
       ) : null}
 
-      <section className="layout">
+      <section className={showSidePanel ? "layout" : "layout layoutNoSide"}>
         <div className="graphCard">
           <svg
             ref={svgRef}
@@ -1175,22 +1319,22 @@ export default function ViewerPage() {
             <rect
               x={120}
               y={170}
-              width={2220}
-              height={1040}
+              width={2520}
+              height={1160}
               rx={36}
               className="activeLodBand"
             />
 
-            <text x={55} y={675} className="lodMainLabel">
+            <text x={55} y={735} className="lodMainLabel">
               {LOD_LABELS[activeLod]}
             </text>
 
-            <text x={55} y={705} className="lodSubLabel">
+            <text x={55} y={765} className="lodSubLabel">
               {LOD_DETAILS[activeLod]}
             </text>
 
             {PILLARS.map((pillar) => {
-              const frame = PILLAR_FRAMES[pillar];
+              const frame = computedPillarFrames[pillar];
 
               return (
                 <g key={pillar}>
@@ -1211,6 +1355,15 @@ export default function ViewerPage() {
                     className="pillarTitle"
                   >
                     {PILLAR_LABELS[pillar]}
+                  </text>
+
+                  <text
+                    x={frame.x + frame.w - 28}
+                    y={frame.y + frame.h - 22}
+                    textAnchor="end"
+                    className="pillarSizeLabel"
+                  >
+                    {Math.round(frame.w)} × {Math.round(frame.h)}
                   </text>
                 </g>
               );
@@ -1342,336 +1495,425 @@ export default function ViewerPage() {
           </svg>
         </div>
 
-        <aside className="sidePanel">
-          <div className="panelBlock">
-            <p className="panelLabel">Onglet actif</p>
-
-            <div className="lodStatusCard">
-              <strong>{LOD_LABELS[activeLod]}</strong>
-              <span>{LOD_DETAILS[activeLod]}</span>
-              <em>
-                {activeLodVisibleCount}/{activeLodTotalCount} bulles visibles ·{" "}
-                {activeLodLinks.length} lien(s)
-              </em>
+        {showSidePanel ? (
+          <aside className="sidePanel">
+            <div className="panelHeaderRow">
+              <span>Panneau fonctionnalités</span>
+              <button onClick={() => setShowSidePanel(false)}>Replier</button>
             </div>
-          </div>
 
-          <div className="panelBlock">
-            <p className="panelLabel">Créer / casser un lien</p>
+            <div className="panelBlock">
+              <p className="panelLabel">Onglet actif</p>
 
-            <div className="linkSelectionBox">
-              <div>
-                <span>Bulle 1</span>
-                <strong>{selectedLinkBubbles[0]?.label ?? "Non sélectionnée"}</strong>
-                <small>{selectedLinkBubbles[0]?.subtitle ?? "Clique une bulle"}</small>
-              </div>
-
-              <div>
-                <span>Bulle 2</span>
-                <strong>{selectedLinkBubbles[1]?.label ?? "Non sélectionnée"}</strong>
-                <small>{selectedLinkBubbles[1]?.subtitle ?? "Clique une deuxième bulle"}</small>
+              <div className="lodStatusCard">
+                <strong>{LOD_LABELS[activeLod]}</strong>
+                <span>{LOD_DETAILS[activeLod]}</span>
+                <em>
+                  {activeLodVisibleCount}/{activeLodTotalCount} bulles visibles ·{" "}
+                  {activeLodLinks.length} lien(s)
+                </em>
               </div>
             </div>
 
-            <div className="linkCreator">
-              <input
-                value={linkLabel}
-                onChange={(event) => setLinkLabel(event.target.value)}
-                placeholder="Nom du lien..."
-              />
+            <div className="panelBlock">
+              <p className="panelLabel">Ajuster les cadres des piliers</p>
 
-              <input
-                type="color"
-                value={linkColor}
-                onChange={(event) => setLinkColor(event.target.value)}
-                title="Couleur du lien"
-              />
-
-              <button
-                onClick={createLinkBetweenSelectedBubbles}
-                disabled={selectedLinkBubbles.length !== 2}
-              >
-                Créer lien
-              </button>
-
-              <button
-                className="dangerButton"
-                onClick={breakLinkBetweenSelectedBubbles}
-                disabled={selectedLinkBubbles.length !== 2}
-              >
-                Casser lien
-              </button>
-
-              <button onClick={clearLinkSelection}>Vider sélection</button>
-            </div>
-
-            <p className="hint">
-              Sélection actuelle : <strong>{selectedLinkBubbles.length}/2</strong>.{" "}
-              Liens existants entre les deux bulles sélectionnées :{" "}
-              <strong>{selectedPairExistingLinks.length}</strong>.
-            </p>
-          </div>
-
-          <div className="panelBlock">
-            <p className="panelLabel">Bulle sélectionnée</p>
-
-            {selectedBubble ? (
-              <>
-                <div className="selectedHeader">
-                  <span
-                    className="dot"
-                    style={{ background: selectedBubble.color }}
-                  />
-                  <div>
-                    <h2>{selectedBubble.label}</h2>
-                    <p>
-                      {selectedBubble.subtitle} · {selectedBubble.family}
-                      {selectedBubble.pillar
-                        ? ` · ${PILLAR_LABELS[selectedBubble.pillar]}`
-                        : ""}
-                      {selectedBubble.lod ? ` · ${selectedBubble.lod}` : ""}
-                    </p>
-                  </div>
-                </div>
-
-                <p className="description">{selectedBubble.description}</p>
-
-                <div className="positionGrid">
-                  <div>
-                    <span>Position X</span>
-                    <strong>{Math.round(selectedBubble.x)}</strong>
-                  </div>
-                  <div>
-                    <span>Position Y</span>
-                    <strong>{Math.round(selectedBubble.y)}</strong>
-                  </div>
-                </div>
-
-                <div className="selectedActions">
-                  <button onClick={() => setBubbleVisible(selectedBubble.id, true)}>
-                    Afficher
-                  </button>
-                  <button onClick={() => setBubbleVisible(selectedBubble.id, false)}>
-                    Masquer
-                  </button>
-                  <button
-                    className="dangerButton"
-                    onClick={() => deleteBubble(selectedBubble.id)}
-                  >
-                    Supprimer
-                  </button>
-                </div>
-              </>
-            ) : (
-              <p className="empty">Aucune bulle sélectionnée.</p>
-            )}
-          </div>
-
-          <div className="panelBlock">
-            <div className="libraryHeader">
-              <div>
-                <p className="panelLabel">Liens · {activeLod}</p>
-                <p className="libraryCount">
-                  {activeLodLinks.length} lien(s) dans l’onglet actif
-                </p>
-              </div>
-
-              <div className="libraryActions">
-                <button className="dangerButton" onClick={deleteAllActiveLodLinks}>
-                  Supprimer liens LOD
-                </button>
-              </div>
-            </div>
-
-            <div className="linkList">
-              {activeLodLinks.length === 0 ? (
-                <p className="empty">Aucun lien dans cet onglet.</p>
-              ) : (
-                activeLodLinks.map((link) => (
-                  <div key={link.id} className="linkItem">
-                    <span
-                      className="linkDot"
-                      style={{ background: link.color }}
-                    />
-
-                    <div className="linkItemContent">
-                      <strong>{link.label}</strong>
-                      <small>
-                        {link.source.label} → {link.target.label}
-                      </small>
-                      <em>
-                        {link.source.visible && link.target.visible
-                          ? "Affiché"
-                          : "Masqué : source ou cible non visible"}
-                      </em>
-                    </div>
-
-                    <button
-                      className="miniDeleteButton"
-                      onClick={() => deleteLink(link.id)}
-                    >
-                      Suppr.
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="panelBlock">
-            <p className="panelLabel">Ajouter une bulle libre dans {activeLod}</p>
-
-            <div
-              className={
-                newBubbleFamily === "LIBRE"
-                  ? "addBubbleGrid addBubbleGridFree"
-                  : "addBubbleGrid"
-              }
-            >
-              <select
-                value={newBubbleFamily}
-                onChange={(event) =>
-                  setNewBubbleFamily(event.target.value as BubbleFamily)
-                }
-              >
-                <option value="METIER">Métier</option>
-                <option value="BE_SUB">Sous-métier BE</option>
-                <option value="BM_SUB">Sous-métier BM</option>
-                <option value="SIMULATION">Sous-métier SIM</option>
-                <option value="OUTIL">Outil</option>
-                <option value="LIBRE">Texte libre</option>
-              </select>
-
-              {newBubbleFamily === "LIBRE" ? (
-                <>
-                  <input
-                    value={freeBubbleText}
-                    onChange={(event) => setFreeBubbleText(event.target.value)}
-                    placeholder="Texte de la bulle..."
-                  />
-
-                  <input
-                    type="color"
-                    value={freeBubbleColor}
-                    onChange={(event) => setFreeBubbleColor(event.target.value)}
-                    title="Couleur de la bulle"
-                  />
-                </>
-              ) : (
-                <select
-                  value={newBubbleValue}
-                  onChange={(event) => setNewBubbleValue(event.target.value)}
-                >
-                  {newBubbleOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              <button onClick={addCustomBubble}>Ajouter</button>
-            </div>
-
-            <p className="hint">
-              Tu peux ajouter une bulle standard ou une bulle texte libre avec
-              sa propre couleur. Elle sera créée uniquement dans l’onglet {activeLod}.
-            </p>
-          </div>
-
-          <div className="panelBlock">
-            <div className="libraryHeader">
-              <div>
-                <p className="panelLabel">Bibliothèque des bulles · {activeLod}</p>
-                <p className="libraryCount">
-                  {filteredBubbles.length} bulle(s) dans la sélection
-                </p>
-              </div>
-
-              <div className="libraryActions">
-                <button onClick={showFilteredBubbles}>Tout cocher</button>
-                <button onClick={hideFilteredBubbles}>Tout décocher</button>
-                <button className="dangerButton" onClick={deleteFilteredBubbles}>
-                  Supprimer sélection
-                </button>
-              </div>
-            </div>
-
-            <div className="bubbleList">
-              {filteredBubbles.length === 0 ? (
-                <p className="empty">Aucune bulle ne correspond aux filtres.</p>
-              ) : (
-                filteredBubbles.map((bubble) => (
-                  <div
-                    key={bubble.id}
-                    className={
-                      bubble.id === selectedBubbleId
-                        ? "bubbleListItem bubbleListItemSelected"
-                        : "bubbleListItem"
+              <div className="frameResizeGrid">
+                <label>
+                  Pilier
+                  <select
+                    value={selectedFramePillar}
+                    onChange={(event) =>
+                      setSelectedFramePillar(event.target.value as Pillar)
                     }
                   >
-                    <button
-                      className="bubbleListMain"
-                      onClick={() => handleLibraryBubbleClick(bubble.id)}
-                    >
-                      <span
-                        className="bubbleListDot"
-                        style={{ background: bubble.color }}
-                      />
-                      <span>
-                        <strong>{bubble.label}</strong>
-                        <small>{bubble.subtitle}</small>
-                      </span>
-                    </button>
+                    <option value="PIECE">Pièce</option>
+                    <option value="HP">HP</option>
+                    <option value="GPE">GPE</option>
+                  </select>
+                </label>
 
-                    <div className="bubbleListControls">
-                      <label className="visibilityToggle">
-                        <input
-                          type="checkbox"
-                          checked={bubble.visible}
-                          onChange={(event) =>
-                            setBubbleVisible(bubble.id, event.target.checked)
-                          }
-                        />
-                        <span>{bubble.visible ? "Visible" : "Masquée"}</span>
-                      </label>
+                <div className="rangeRow">
+                  <span>Largeur</span>
+                  <input
+                    type="range"
+                    min={MIN_FRAME_WIDTH}
+                    max={MAX_FRAME_WIDTH}
+                    step={20}
+                    value={selectedFrame.w}
+                    onChange={(event) =>
+                      updatePillarFrameSize(
+                        selectedFramePillar,
+                        "w",
+                        Number(event.target.value)
+                      )
+                    }
+                  />
+                  <strong>{selectedFrame.w}</strong>
+                </div>
+
+                <div className="rangeRow">
+                  <span>Hauteur</span>
+                  <input
+                    type="range"
+                    min={MIN_FRAME_HEIGHT}
+                    max={MAX_FRAME_HEIGHT}
+                    step={20}
+                    value={selectedFrame.h}
+                    onChange={(event) =>
+                      updatePillarFrameSize(
+                        selectedFramePillar,
+                        "h",
+                        Number(event.target.value)
+                      )
+                    }
+                  />
+                  <strong>{selectedFrame.h}</strong>
+                </div>
+
+                <div className="quickFrameButtons">
+                  <button onClick={() => adjustSelectedPillarFrame(80, 80)}>
+                    Agrandir
+                  </button>
+                  <button onClick={() => adjustSelectedPillarFrame(-80, -80)}>
+                    Rétrécir
+                  </button>
+                  <button onClick={resetSelectedPillarFrame}>
+                    Reset pilier
+                  </button>
+                  <button onClick={resetAllPillarFrames}>
+                    Reset tous
+                  </button>
+                </div>
+              </div>
+
+              <p className="hint">
+                Les dimensions sont sauvegardées dans le navigateur. Les bulles
+                restent déplaçables librement dans les cadres.
+              </p>
+            </div>
+
+            <div className="panelBlock">
+              <p className="panelLabel">Créer / casser un lien</p>
+
+              <div className="linkSelectionBox">
+                <div>
+                  <span>Bulle 1</span>
+                  <strong>{selectedLinkBubbles[0]?.label ?? "Non sélectionnée"}</strong>
+                  <small>{selectedLinkBubbles[0]?.subtitle ?? "Clique une bulle"}</small>
+                </div>
+
+                <div>
+                  <span>Bulle 2</span>
+                  <strong>{selectedLinkBubbles[1]?.label ?? "Non sélectionnée"}</strong>
+                  <small>{selectedLinkBubbles[1]?.subtitle ?? "Clique une deuxième bulle"}</small>
+                </div>
+              </div>
+
+              <div className="linkCreator">
+                <input
+                  value={linkLabel}
+                  onChange={(event) => setLinkLabel(event.target.value)}
+                  placeholder="Nom du lien..."
+                />
+
+                <input
+                  type="color"
+                  value={linkColor}
+                  onChange={(event) => setLinkColor(event.target.value)}
+                  title="Couleur du lien"
+                />
+
+                <button
+                  onClick={createLinkBetweenSelectedBubbles}
+                  disabled={selectedLinkBubbles.length !== 2}
+                >
+                  Créer lien
+                </button>
+
+                <button
+                  className="dangerButton"
+                  onClick={breakLinkBetweenSelectedBubbles}
+                  disabled={selectedLinkBubbles.length !== 2}
+                >
+                  Casser lien
+                </button>
+
+                <button onClick={clearLinkSelection}>Vider sélection</button>
+              </div>
+
+              <p className="hint">
+                Sélection actuelle : <strong>{selectedLinkBubbles.length}/2</strong>.{" "}
+                Liens existants entre les deux bulles sélectionnées :{" "}
+                <strong>{selectedPairExistingLinks.length}</strong>.
+              </p>
+            </div>
+
+            <div className="panelBlock">
+              <p className="panelLabel">Bulle sélectionnée</p>
+
+              {selectedBubble ? (
+                <>
+                  <div className="selectedHeader">
+                    <span
+                      className="dot"
+                      style={{ background: selectedBubble.color }}
+                    />
+                    <div>
+                      <h2>{selectedBubble.label}</h2>
+                      <p>
+                        {selectedBubble.subtitle} · {selectedBubble.family}
+                        {selectedBubble.pillar
+                          ? ` · ${PILLAR_LABELS[selectedBubble.pillar]}`
+                          : ""}
+                        {selectedBubble.lod ? ` · ${selectedBubble.lod}` : ""}
+                      </p>
+                    </div>
+                  </div>
+
+                  <p className="description">{selectedBubble.description}</p>
+
+                  <div className="positionGrid">
+                    <div>
+                      <span>Position X</span>
+                      <strong>{Math.round(selectedBubble.x)}</strong>
+                    </div>
+                    <div>
+                      <span>Position Y</span>
+                      <strong>{Math.round(selectedBubble.y)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="selectedActions">
+                    <button onClick={() => setBubbleVisible(selectedBubble.id, true)}>
+                      Afficher
+                    </button>
+                    <button onClick={() => setBubbleVisible(selectedBubble.id, false)}>
+                      Masquer
+                    </button>
+                    <button
+                      className="dangerButton"
+                      onClick={() => deleteBubble(selectedBubble.id)}
+                    >
+                      Supprimer
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <p className="empty">Aucune bulle sélectionnée.</p>
+              )}
+            </div>
+
+            <div className="panelBlock">
+              <div className="libraryHeader">
+                <div>
+                  <p className="panelLabel">Liens · {activeLod}</p>
+                  <p className="libraryCount">
+                    {activeLodLinks.length} lien(s) dans l’onglet actif
+                  </p>
+                </div>
+
+                <div className="libraryActions">
+                  <button className="dangerButton" onClick={deleteAllActiveLodLinks}>
+                    Supprimer liens LOD
+                  </button>
+                </div>
+              </div>
+
+              <div className="linkList">
+                {activeLodLinks.length === 0 ? (
+                  <p className="empty">Aucun lien dans cet onglet.</p>
+                ) : (
+                  activeLodLinks.map((link) => (
+                    <div key={link.id} className="linkItem">
+                      <span
+                        className="linkDot"
+                        style={{ background: link.color }}
+                      />
+
+                      <div className="linkItemContent">
+                        <strong>{link.label}</strong>
+                        <small>
+                          {link.source.label} → {link.target.label}
+                        </small>
+                        <em>
+                          {link.source.visible && link.target.visible
+                            ? "Affiché"
+                            : "Masqué : source ou cible non visible"}
+                        </em>
+                      </div>
 
                       <button
                         className="miniDeleteButton"
-                        onClick={() => deleteBubble(bubble.id)}
-                        title="Supprimer la bulle"
+                        onClick={() => deleteLink(link.id)}
                       >
                         Suppr.
                       </button>
                     </div>
-                  </div>
-                ))
-              )}
+                  ))
+                )}
+              </div>
             </div>
-          </div>
 
-          <div className="panelBlock">
-            <p className="panelLabel">Lecture V1.1</p>
+            <div className="panelBlock">
+              <p className="panelLabel">Ajouter une bulle libre dans {activeLod}</p>
 
-            <ul className="readingList">
-              <li>
-                <strong>Cadres agrandis</strong> : Pièce, HP et GPE sont beaucoup plus larges.
-              </li>
-              <li>
-                <strong>Zone de travail élargie</strong> : le viewer accepte davantage de bulles.
-              </li>
-              <li>
-                <strong>Défilement horizontal</strong> : disponible si l’écran est trop petit.
-              </li>
-              <li>
-                <strong>Liens</strong> : les liens continuent à suivre les bulles déplacées.
-              </li>
-              <li>
-                <strong>Fonctions conservées</strong> : ajout, suppression, affichage, masquage et texte libre.
-              </li>
-            </ul>
-          </div>
-        </aside>
+              <div
+                className={
+                  newBubbleFamily === "LIBRE"
+                    ? "addBubbleGrid addBubbleGridFree"
+                    : "addBubbleGrid"
+                }
+              >
+                <select
+                  value={newBubbleFamily}
+                  onChange={(event) =>
+                    setNewBubbleFamily(event.target.value as BubbleFamily)
+                  }
+                >
+                  <option value="METIER">Métier</option>
+                  <option value="BE_SUB">Sous-métier BE</option>
+                  <option value="BM_SUB">Sous-métier BM</option>
+                  <option value="SIMULATION">Sous-métier SIM</option>
+                  <option value="OUTIL">Outil</option>
+                  <option value="LIBRE">Texte libre</option>
+                </select>
+
+                {newBubbleFamily === "LIBRE" ? (
+                  <>
+                    <input
+                      value={freeBubbleText}
+                      onChange={(event) => setFreeBubbleText(event.target.value)}
+                      placeholder="Texte de la bulle..."
+                    />
+
+                    <input
+                      type="color"
+                      value={freeBubbleColor}
+                      onChange={(event) => setFreeBubbleColor(event.target.value)}
+                      title="Couleur de la bulle"
+                    />
+                  </>
+                ) : (
+                  <select
+                    value={newBubbleValue}
+                    onChange={(event) => setNewBubbleValue(event.target.value)}
+                  >
+                    {newBubbleOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <button onClick={addCustomBubble}>Ajouter</button>
+              </div>
+
+              <p className="hint">
+                Tu peux ajouter une bulle standard ou une bulle texte libre avec
+                sa propre couleur. Elle sera créée uniquement dans l’onglet {activeLod}.
+              </p>
+            </div>
+
+            <div className="panelBlock">
+              <div className="libraryHeader">
+                <div>
+                  <p className="panelLabel">Bibliothèque des bulles · {activeLod}</p>
+                  <p className="libraryCount">
+                    {filteredBubbles.length} bulle(s) dans la sélection
+                  </p>
+                </div>
+
+                <div className="libraryActions">
+                  <button onClick={showFilteredBubbles}>Tout cocher</button>
+                  <button onClick={hideFilteredBubbles}>Tout décocher</button>
+                  <button className="dangerButton" onClick={deleteFilteredBubbles}>
+                    Supprimer sélection
+                  </button>
+                </div>
+              </div>
+
+              <div className="bubbleList">
+                {filteredBubbles.length === 0 ? (
+                  <p className="empty">Aucune bulle ne correspond aux filtres.</p>
+                ) : (
+                  filteredBubbles.map((bubble) => (
+                    <div
+                      key={bubble.id}
+                      className={
+                        bubble.id === selectedBubbleId
+                          ? "bubbleListItem bubbleListItemSelected"
+                          : "bubbleListItem"
+                      }
+                    >
+                      <button
+                        className="bubbleListMain"
+                        onClick={() => handleLibraryBubbleClick(bubble.id)}
+                      >
+                        <span
+                          className="bubbleListDot"
+                          style={{ background: bubble.color }}
+                        />
+                        <span>
+                          <strong>{bubble.label}</strong>
+                          <small>{bubble.subtitle}</small>
+                        </span>
+                      </button>
+
+                      <div className="bubbleListControls">
+                        <label className="visibilityToggle">
+                          <input
+                            type="checkbox"
+                            checked={bubble.visible}
+                            onChange={(event) =>
+                              setBubbleVisible(bubble.id, event.target.checked)
+                            }
+                          />
+                          <span>{bubble.visible ? "Visible" : "Masquée"}</span>
+                        </label>
+
+                        <button
+                          className="miniDeleteButton"
+                          onClick={() => deleteBubble(bubble.id)}
+                          title="Supprimer la bulle"
+                        >
+                          Suppr.
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="panelBlock">
+              <p className="panelLabel">Lecture V1.2</p>
+
+              <ul className="readingList">
+                <li>
+                  <strong>Onglets LOD repliables</strong> : masquer/redéployer pour gagner de la place.
+                </li>
+                <li>
+                  <strong>Panneau latéral repliable</strong> : le viewer prend toute la largeur.
+                </li>
+                <li>
+                  <strong>Cadres ajustables</strong> : largeur/hauteur modifiables pour Pièce, HP et GPE.
+                </li>
+                <li>
+                  <strong>Sauvegarde</strong> : les dimensions des cadres sont persistées dans le navigateur.
+                </li>
+              </ul>
+            </div>
+          </aside>
+        ) : (
+          <button
+            className="sidePanelDock"
+            onClick={() => setShowSidePanel(true)}
+          >
+            Afficher panneau
+          </button>
+        )}
       </section>
 
       <style jsx>{`
@@ -1723,7 +1965,7 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 1220px;
+          max-width: 1440px;
         }
 
         .toolbar input,
@@ -1736,7 +1978,12 @@ export default function ViewerPage() {
         .libraryActions button,
         .miniDeleteButton,
         .linkCreator input,
-        .linkCreator button {
+        .linkCreator button,
+        .panelHeaderRow button,
+        .frameResizeGrid select,
+        .quickFrameButtons button,
+        .lodTabsCollapsed button,
+        .compactLodButtons button {
           border: 1px solid rgba(148, 163, 184, 0.28);
           background: rgba(15, 23, 42, 0.84);
           color: #e5e7eb;
@@ -1764,7 +2011,11 @@ export default function ViewerPage() {
         .selectedActions button,
         .libraryActions button,
         .miniDeleteButton,
-        .linkCreator button {
+        .linkCreator button,
+        .panelHeaderRow button,
+        .quickFrameButtons button,
+        .lodTabsCollapsed button,
+        .compactLodButtons button {
           cursor: pointer;
           font-weight: 800;
           background: rgba(37, 99, 235, 0.34);
@@ -1848,11 +2099,50 @@ export default function ViewerPage() {
           box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.16) inset;
         }
 
+        .lodTabsCollapsed {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          background: rgba(15, 23, 42, 0.72);
+          border-radius: 18px;
+          padding: 10px 12px;
+          margin-bottom: 14px;
+          color: #cbd5e1;
+          font-size: 13px;
+        }
+
+        .lodTabsCollapsed strong {
+          color: #f8fafc;
+        }
+
+        .compactLodButtons {
+          display: flex;
+          gap: 6px;
+          margin-left: auto;
+        }
+
+        .compactLodButtons button {
+          padding: 8px 10px;
+        }
+
+        .compactLodActive {
+          background: rgba(14, 165, 233, 0.34) !important;
+          border-color: rgba(56, 189, 248, 0.58) !important;
+          color: #e0f2fe !important;
+        }
+
         .layout {
           display: grid;
           grid-template-columns: minmax(0, 1fr) 430px;
           gap: 18px;
           align-items: stretch;
+          position: relative;
+        }
+
+        .layoutNoSide {
+          grid-template-columns: minmax(0, 1fr);
         }
 
         .graphCard {
@@ -1869,12 +2159,19 @@ export default function ViewerPage() {
         }
 
         .graphSvg {
-          width: max(100%, 1900px);
-          min-width: 1900px;
-          height: 860px;
-          min-height: 860px;
+          width: max(100%, 2100px);
+          min-width: 2100px;
+          height: 900px;
+          min-height: 900px;
           display: block;
           touch-action: none;
+        }
+
+        .layoutNoSide .graphSvg {
+          width: max(100%, 2400px);
+          min-width: 2400px;
+          height: 940px;
+          min-height: 940px;
         }
 
         .graphSvgMove {
@@ -1903,6 +2200,12 @@ export default function ViewerPage() {
           font-size: 23px;
           font-weight: 900;
           letter-spacing: 0.05em;
+        }
+
+        .pillarSizeLabel {
+          fill: rgba(226, 232, 240, 0.48);
+          font-size: 12px;
+          font-weight: 800;
         }
 
         .lodMainLabel {
@@ -1971,6 +2274,45 @@ export default function ViewerPage() {
           gap: 14px;
         }
 
+        .sidePanelDock {
+          position: fixed;
+          right: 18px;
+          top: 50%;
+          z-index: 20;
+          transform: translateY(-50%);
+          border: 1px solid rgba(56, 189, 248, 0.45);
+          background: rgba(14, 165, 233, 0.28);
+          color: #e0f2fe;
+          border-radius: 999px;
+          padding: 12px 16px;
+          cursor: pointer;
+          font-weight: 900;
+          box-shadow: 0 18px 45px rgba(0, 0, 0, 0.34);
+        }
+
+        .panelHeaderRow {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          background: rgba(15, 23, 42, 0.84);
+          border-radius: 18px;
+          padding: 10px 12px;
+        }
+
+        .panelHeaderRow span {
+          font-size: 12px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: 0.1em;
+          color: #93c5fd;
+        }
+
+        .panelHeaderRow button {
+          padding: 8px 10px;
+        }
+
         .panelBlock {
           border: 1px solid rgba(148, 163, 184, 0.2);
           background: rgba(15, 23, 42, 0.84);
@@ -2007,6 +2349,52 @@ export default function ViewerPage() {
           color: #cbd5e1;
           font-size: 13px;
           font-style: normal;
+        }
+
+        .frameResizeGrid {
+          display: grid;
+          gap: 10px;
+        }
+
+        .frameResizeGrid label {
+          display: grid;
+          gap: 6px;
+          color: #cbd5e1;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .frameResizeGrid select {
+          width: 100%;
+        }
+
+        .rangeRow {
+          display: grid;
+          grid-template-columns: 72px 1fr 54px;
+          align-items: center;
+          gap: 10px;
+          color: #cbd5e1;
+          font-size: 12px;
+        }
+
+        .rangeRow input[type="range"] {
+          width: 100%;
+          accent-color: #38bdf8;
+        }
+
+        .rangeRow strong {
+          color: #f8fafc;
+          text-align: right;
+        }
+
+        .quickFrameButtons {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 8px;
+        }
+
+        .quickFrameButtons button {
+          padding: 9px 10px;
         }
 
         .libraryHeader {
@@ -2330,7 +2718,8 @@ export default function ViewerPage() {
           .addBubbleGrid,
           .addBubbleGridFree,
           .linkCreator,
-          .linkSelectionBox {
+          .linkSelectionBox,
+          .quickFrameButtons {
             grid-template-columns: 1fr;
           }
 
@@ -2346,9 +2735,18 @@ export default function ViewerPage() {
             grid-template-columns: 1fr;
           }
 
+          .lodTabsCollapsed {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .compactLodButtons {
+            margin-left: 0;
+          }
+
           .graphSvg {
-            width: 1800px;
-            min-width: 1800px;
+            width: 2200px;
+            min-width: 2200px;
           }
         }
       `}</style>
