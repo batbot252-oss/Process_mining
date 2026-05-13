@@ -41,7 +41,11 @@ type SimSubTrade =
   | "SIM_INJ_C"
   | "SIM_INJ_N"
   | "SIM_PRE_CHAU"
-  | "SIM_SDF";
+  | "SIM_SDF"
+  | "SIM_FA"
+  | "SIM_CND";
+
+type SubTradeKey = BeSubTrade | BmSubTrade | SimSubTrade;
 
 type BubbleFamily =
   | "METIER"
@@ -49,17 +53,23 @@ type BubbleFamily =
   | "BM_SUB"
   | "SIMULATION"
   | "OUTIL"
-  | "LIBRE";
+  | "LIBRE"
+  | "FONCTION"
+  | "GEOMETRIE";
 
 type PanelKey =
   | "ACTIVE_LOD"
   | "FRAME_RESIZE"
+  | "FUNCTION_IMPACT"
+  | "IMPACT_MATRIX"
   | "LINK_EDITOR"
   | "SELECTED_BUBBLE"
   | "LINKS"
   | "ADD_BUBBLE"
   | "BUBBLE_LIBRARY"
   | "READING";
+
+type ImpactLevel = "Faible" | "Moyen" | "Fort" | "Critique";
 
 type Position = {
   x: number;
@@ -78,6 +88,31 @@ type PillarFrameSize = {
   h: number;
 };
 
+type FunctionDefinition = {
+  id: string;
+  label: string;
+  subTrade: SubTradeKey;
+  description: string;
+  defaultPillars: Pillar[];
+  defaultLods: LOD[];
+  tools: ToolName[];
+  defaultLevel: ImpactLevel;
+  geometryImpact: Record<Pillar, string>;
+};
+
+type FunctionMeta = {
+  functionId: string;
+  subTrade: SubTradeKey;
+  impactedPillars: Pillar[];
+  impactLevel: ImpactLevel;
+  tools: ToolName[];
+  note: string;
+};
+
+type GeometryAnchorMeta = {
+  pillar: Pillar;
+};
+
 type Bubble = {
   id: string;
   label: string;
@@ -91,6 +126,8 @@ type Bubble = {
   description: string;
   visibleDefault: boolean;
   isCustom?: boolean;
+  functionMeta?: FunctionMeta;
+  geometryAnchorMeta?: GeometryAnchorMeta;
 };
 
 type BubbleView = Bubble & {
@@ -122,11 +159,11 @@ type ResolvedBubbleLink = BubbleLink & {
 const WIDTH = 2700;
 const HEIGHT = 1400;
 
-const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v5";
-const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v5";
-const LS_BUBBLE_LINKS = "plm_free_bubble_links_v3";
-const LS_PILLAR_FRAME_SIZES = "plm_pillar_frame_sizes_v1";
-const LS_COLLAPSED_PANELS = "plm_sidebar_collapsed_panels_v2";
+const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v6";
+const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v6";
+const LS_BUBBLE_LINKS = "plm_free_bubble_links_v4";
+const LS_PILLAR_FRAME_SIZES = "plm_pillar_frame_sizes_v2";
+const LS_COLLAPSED_PANELS = "plm_sidebar_collapsed_panels_v3";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -165,6 +202,14 @@ const SIM_SUB_TRADES: SimSubTrade[] = [
   "SIM_INJ_N",
   "SIM_PRE_CHAU",
   "SIM_SDF",
+  "SIM_FA",
+  "SIM_CND",
+];
+
+const SUB_TRADES: SubTradeKey[] = [
+  ...BE_SUB_TRADES,
+  ...BM_SUB_TRADES,
+  ...SIM_SUB_TRADES,
 ];
 
 const PILLAR_LABELS: Record<Pillar, string> = {
@@ -221,6 +266,14 @@ const SIM_SUB_TRADE_LABELS: Record<SimSubTrade, string> = {
   SIM_INJ_N: "Inj_N",
   SIM_PRE_CHAU: "Pré_chau",
   SIM_SDF: "Sdf",
+  SIM_FA: "FA",
+  SIM_CND: "CND",
+};
+
+const SUB_TRADE_LABELS: Record<SubTradeKey, string> = {
+  ...BE_SUB_TRADE_LABELS,
+  ...BM_SUB_TRADE_LABELS,
+  ...SIM_SUB_TRADE_LABELS,
 };
 
 const ENTITY_COLORS: Record<Entity, string> = {
@@ -238,6 +291,15 @@ const FAMILY_COLORS: Record<BubbleFamily, string> = {
   SIMULATION: "#a78bfa",
   OUTIL: "#38bdf8",
   LIBRE: "#facc15",
+  FONCTION: "#fb923c",
+  GEOMETRIE: "#e2e8f0",
+};
+
+const IMPACT_COLORS: Record<ImpactLevel, string> = {
+  Faible: "#93c5fd",
+  Moyen: "#facc15",
+  Fort: "#fb923c",
+  Critique: "#f87171",
 };
 
 const PILLAR_COLORS: Record<Pillar, string> = {
@@ -249,6 +311,8 @@ const PILLAR_COLORS: Record<Pillar, string> = {
 const PANEL_ICONS: Record<PanelKey, string> = {
   ACTIVE_LOD: "◉",
   FRAME_RESIZE: "□",
+  FUNCTION_IMPACT: "ƒ",
+  IMPACT_MATRIX: "▦",
   LINK_EDITOR: "↔",
   SELECTED_BUBBLE: "●",
   LINKS: "⛓",
@@ -260,12 +324,14 @@ const PANEL_ICONS: Record<PanelKey, string> = {
 const DEFAULT_COLLAPSED_PANELS: Record<PanelKey, boolean> = {
   ACTIVE_LOD: false,
   FRAME_RESIZE: false,
+  FUNCTION_IMPACT: false,
+  IMPACT_MATRIX: false,
   LINK_EDITOR: false,
   SELECTED_BUBBLE: false,
   LINKS: false,
   ADD_BUBBLE: false,
   BUBBLE_LIBRARY: false,
-  READING: false,
+  READING: true,
 };
 
 const BASE_PILLAR_FRAMES: Record<Pillar, PillarFrame> = {
@@ -285,6 +351,217 @@ const MAX_FRAME_WIDTH = 980;
 const MIN_FRAME_HEIGHT = 600;
 const MAX_FRAME_HEIGHT = 1120;
 
+const FUNCTION_DEFINITIONS: FunctionDefinition[] = [
+  {
+    id: "F_BE_AERO_01",
+    label: "Définir surfaces aérodynamiques",
+    subTrade: "BE_AERO",
+    description:
+      "Définit les surfaces externes, les profils, les enveloppes et les contraintes d’écoulement qui structurent la géométrie fonctionnelle.",
+    defaultPillars: ["PIECE", "GPE"],
+    defaultLods: ["LOD1", "LOD2"],
+    tools: ["CATIA", "3DEXPERIENCE", "Python"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact direct sur les surfaces externes, profils, rayons et transitions.",
+      HP: "Impact indirect si les interfaces ou passages internes évoluent.",
+      GPE: "Impact fort sur l’enveloppe produit et les interfaces globales.",
+    },
+  },
+  {
+    id: "F_BE_MECA_01",
+    label: "Contraindre interfaces mécaniques",
+    subTrade: "BE_MECA",
+    description:
+      "Structure les interfaces, épaisseurs, fixations, jeux fonctionnels, zones de raideur et contraintes d’assemblage.",
+    defaultPillars: ["PIECE", "HP", "GPE"],
+    defaultLods: ["LOD1", "LOD2", "LOD3"],
+    tools: ["CATIA", "3DEXPERIENCE", "ABAQUS"],
+    defaultLevel: "Critique",
+    geometryImpact: {
+      PIECE: "Impact fort sur les interfaces, épaisseurs et zones fonctionnelles.",
+      HP: "Impact fort sur les interfaces internes et passages nécessaires.",
+      GPE: "Impact fort sur la cohérence d’assemblage et la chaîne fonctionnelle.",
+    },
+  },
+  {
+    id: "F_BE_THER_01",
+    label: "Construire enveloppe thermique",
+    subTrade: "BE_THER",
+    description:
+      "Définit les zones chaudes/froides, épaisseurs thermiques, isolements, flux, zones à protéger et interfaces thermiques.",
+    defaultPillars: ["HP", "GPE"],
+    defaultLods: ["LOD1", "LOD2"],
+    tools: ["CATIA", "ABAQUS", "Python"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact local si les épaisseurs ou matériaux évoluent.",
+      HP: "Impact direct sur les volumes internes, isolations et passages thermiques.",
+      GPE: "Impact direct sur l’architecture thermique globale.",
+    },
+  },
+  {
+    id: "F_BE_SIM_DIM_01",
+    label: "Dimensionner section critique",
+    subTrade: "BE_SIM_DIM",
+    description:
+      "Identifie les sections critiques, rigidités, zones faibles, marges dimensionnelles et contraintes de tenue mécanique.",
+    defaultPillars: ["PIECE", "HP"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["ABAQUS", "Python", "Excel"],
+    defaultLevel: "Critique",
+    geometryImpact: {
+      PIECE: "Impact direct sur les sections, congés, nervures et épaisseurs.",
+      HP: "Impact possible sur les passages internes et volumes structurels.",
+      GPE: "Impact indirect sur l’architecture si la section critique impose un changement majeur.",
+    },
+  },
+  {
+    id: "F_BE_SIM_METAL_01",
+    label: "Valider zone métallurgique sensible",
+    subTrade: "BE_SIM_METAL",
+    description:
+      "Analyse les zones à risque métallurgique, gradients, concentrations thermomécaniques et contraintes matière.",
+    defaultPillars: ["PIECE", "GPE"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["ProCAST", "ABAQUS", "Python"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact direct sur zones sensibles, raccordements, épaisseurs et volumes matière.",
+      HP: "Impact indirect si la thermique interne modifie les zones à risque.",
+      GPE: "Impact fort si la stratégie matière modifie l’architecture globale.",
+    },
+  },
+  {
+    id: "F_BM_OUT_01",
+    label: "Définir prise outillage",
+    subTrade: "BM_OUT",
+    description:
+      "Définit les zones de prise, accès outillage, dégagements, bridages, références de fabrication et contraintes de montage.",
+    defaultPillars: ["HP", "GPE"],
+    defaultLods: ["LOD1", "LOD2", "LOD3"],
+    tools: ["CATIA", "3DEXPERIENCE", "MES"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact local sur faces de référence, dépouilles et surfaces de prise.",
+      HP: "Impact direct sur accès, dégagements et zones de maintien.",
+      GPE: "Impact direct sur la logique d’assemblage et d’industrialisation.",
+    },
+  },
+  {
+    id: "F_BM_CAO_01",
+    label: "Préparer géométrie industrialisable",
+    subTrade: "BM_CAO",
+    description:
+      "Transforme la géométrie de conception en géométrie exploitable pour fabrication, contrôle, simulation et continuité numérique.",
+    defaultPillars: ["PIECE", "HP", "GPE"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["CATIA", "3DEXPERIENCE", "EKL"],
+    defaultLevel: "Critique",
+    geometryImpact: {
+      PIECE: "Impact fort sur qualité CAO, surfaces, paramètres et robustesse géométrique.",
+      HP: "Impact fort sur cohérence des sous-ensembles et interfaces internes.",
+      GPE: "Impact fort sur nomenclature géométrique et continuité numérique globale.",
+    },
+  },
+  {
+    id: "F_SIM_INJ_C_01",
+    label: "Qualifier injection chaude",
+    subTrade: "SIM_INJ_C",
+    description:
+      "Analyse les flux, remplissage, zones chaudes, points d’entrée et contraintes géométriques liées à l’injection chaude.",
+    defaultPillars: ["PIECE", "HP"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["Moldflow", "Python", "Visual Mesh"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact direct sur épaisseurs, rayons, zones de remplissage et points d’entrée.",
+      HP: "Impact direct sur canaux, passages et volumes associés.",
+      GPE: "Impact indirect sur l’architecture si les conditions d’injection imposent un changement.",
+    },
+  },
+  {
+    id: "F_SIM_INJ_N_01",
+    label: "Qualifier injection normale",
+    subTrade: "SIM_INJ_N",
+    description:
+      "Analyse la faisabilité d’injection standard, remplissage, retrait, défauts potentiels et règles de géométrie process.",
+    defaultPillars: ["PIECE", "HP"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["Moldflow", "ANSA", "Python"],
+    defaultLevel: "Moyen",
+    geometryImpact: {
+      PIECE: "Impact sur épaisseurs, raccordements, zones de retrait et zones de défaut.",
+      HP: "Impact sur passages process et points de contrôle associés.",
+      GPE: "Impact limité sauf si la stratégie process change.",
+    },
+  },
+  {
+    id: "F_SIM_PRE_CHAU_01",
+    label: "Définir stratégie de préchauffage",
+    subTrade: "SIM_PRE_CHAU",
+    description:
+      "Définit les zones de préchauffage, gradients thermiques acceptables, contraintes de préparation et robustesse process.",
+    defaultPillars: ["HP", "GPE"],
+    defaultLods: ["LOD1", "LOD2", "LOD3"],
+    tools: ["ABAQUS", "ProCAST", "Python"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact local si les zones de chauffe imposent des modifications matière ou épaisseur.",
+      HP: "Impact direct sur volumes thermiques et interfaces process.",
+      GPE: "Impact direct sur architecture process et stratégie industrielle.",
+    },
+  },
+  {
+    id: "F_SIM_SDF_01",
+    label: "Analyser solidification / défauts",
+    subTrade: "SIM_SDF",
+    description:
+      "Analyse les risques de solidification, défauts, retassures, gradients, zones critiques et besoin d’évolution géométrique.",
+    defaultPillars: ["PIECE", "GPE"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["ProCAST", "Visual Mesh", "Python"],
+    defaultLevel: "Critique",
+    geometryImpact: {
+      PIECE: "Impact direct sur masses, épaisseurs, congés, zones de défaut et alimentation.",
+      HP: "Impact possible si les volumes internes influencent les gradients.",
+      GPE: "Impact fort sur stratégie globale si l’architecture doit être revue.",
+    },
+  },
+  {
+    id: "F_SIM_FA_01",
+    label: "Définir besoin fabrication additive",
+    subTrade: "SIM_FA",
+    description:
+      "Analyse les contraintes de fabrication additive, orientation, supports, surépaisseurs, accès poudre et robustesse géométrique.",
+    defaultPillars: ["PIECE", "GPE"],
+    defaultLods: ["LOD1", "LOD2", "LOD3"],
+    tools: ["CATIA", "ANSA", "Python"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact direct sur orientation, supports, surépaisseurs et formes fabricables.",
+      HP: "Impact possible sur volumes internes et évacuation matière.",
+      GPE: "Impact fort sur architecture si la stratégie FA impose une segmentation.",
+    },
+  },
+  {
+    id: "F_SIM_CND_01",
+    label: "Définir stratégie CND",
+    subTrade: "SIM_CND",
+    description:
+      "Définit les zones inspectables, accès contrôle, critères CND, visibilité des défauts et contraintes de contrôlabilité.",
+    defaultPillars: ["PIECE", "GPE"],
+    defaultLods: ["LOD2", "LOD3"],
+    tools: ["CIVA", "CATIA", "Power BI"],
+    defaultLevel: "Fort",
+    geometryImpact: {
+      PIECE: "Impact sur accessibilité, épaisseurs contrôlables et zones inspectables.",
+      HP: "Impact indirect si les sous-ensembles bloquent les accès contrôle.",
+      GPE: "Impact direct sur stratégie de contrôle globale et architecture d’inspection.",
+    },
+  },
+];
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -295,6 +572,8 @@ function labelForFamilyValue(family: BubbleFamily, value: string) {
   if (family === "BE_SUB") return BE_SUB_TRADE_LABELS[value as BeSubTrade];
   if (family === "BM_SUB") return BM_SUB_TRADE_LABELS[value as BmSubTrade];
   if (family === "SIMULATION") return SIM_SUB_TRADE_LABELS[value as SimSubTrade];
+  if (family === "FONCTION") return value;
+  if (family === "GEOMETRIE") return value;
   return value;
 }
 
@@ -309,6 +588,8 @@ function subtitleForFamilyValue(family: BubbleFamily, lod: LOD) {
   if (family === "BE_SUB") return `${lod} · Sous-métier BE`;
   if (family === "BM_SUB") return `${lod} · Sous-métier BM`;
   if (family === "SIMULATION") return `${lod} · Sous-métier SIM`;
+  if (family === "FONCTION") return `${lod} · Fonction métier`;
+  if (family === "GEOMETRIE") return `${lod} · Géométrie`;
   return `${lod} · Bulle libre`;
 }
 
@@ -337,6 +618,14 @@ function descriptionForFamilyValue(
 
   if (family === "SIMULATION") {
     return `Sous-métier SIM : ${label}. Cette bulle appartient à l’onglet ${lod} et peut être positionnée dans Pièce, HP ou GPE selon son rôle simulation.`;
+  }
+
+  if (family === "FONCTION") {
+    return `Fonction métier : ${label}. Cette bulle matérialise une action métier qui impacte une ou plusieurs géométries.`;
+  }
+
+  if (family === "GEOMETRIE") {
+    return `Ancre géométrie : ${label}. Cette bulle sert de point de rattachement pour lire les impacts fonctionnels sur la géométrie.`;
   }
 
   return `Bulle libre : ${label}. Cette bulle appartient à l’onglet ${lod}, avec un texte et une couleur personnalisés.`;
@@ -382,7 +671,7 @@ function getOptionsForFamily(family: BubbleFamily) {
 }
 
 function bubbleWidth(label: string) {
-  return clamp(label.length * 8 + 42, 70, 220);
+  return clamp(label.length * 8 + 42, 70, 260);
 }
 
 function getToolInitialBubblePosition(index: number): Position {
@@ -395,12 +684,35 @@ function getToolInitialBubblePosition(index: number): Position {
   };
 }
 
+function getGeometryAnchorId(lod: LOD, pillar: Pillar) {
+  return `${lod}_GEOMETRY_ANCHOR_${pillar}`;
+}
+
+function getFunctionDefinition(functionId: string) {
+  return FUNCTION_DEFINITIONS.find((item) => item.id === functionId);
+}
+
 function buildDefaultBubbles(): Bubble[] {
   const bubbles: Bubble[] = [];
 
   for (const lod of LODS) {
     for (const pillar of PILLARS) {
       const frame = BASE_PILLAR_FRAMES[pillar];
+
+      bubbles.push({
+        id: getGeometryAnchorId(lod, pillar),
+        label: `Géom. ${PILLAR_LABELS[pillar]}`,
+        subtitle: `${LOD_LABELS[lod]} · Ancre impact géométrie`,
+        family: "GEOMETRIE",
+        pillar,
+        lod,
+        x: frame.x + 120,
+        y: frame.y + 55,
+        color: FAMILY_COLORS.GEOMETRIE,
+        description: `Ancre de lecture des impacts fonctionnels sur la géométrie ${PILLAR_LABELS[pillar]} dans ${lod}. Les fonctions métier peuvent être reliées à cette ancre.`,
+        visibleDefault: true,
+        geometryAnchorMeta: { pillar },
+      });
 
       ENTITIES.forEach((entity, index) => {
         bubbles.push({
@@ -411,7 +723,7 @@ function buildDefaultBubbles(): Bubble[] {
           pillar,
           lod,
           x: frame.x + 95 + index * 110,
-          y: frame.y + 110,
+          y: frame.y + 125,
           color: ENTITY_COLORS[entity],
           description: `${entity} associé par défaut au pilier ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}. Cette bulle reste librement déplaçable.`,
           visibleDefault: true,
@@ -427,7 +739,7 @@ function buildDefaultBubbles(): Bubble[] {
           pillar,
           lod,
           x: frame.x + 80 + index * 115,
-          y: frame.y + 190,
+          y: frame.y + 205,
           color: FAMILY_COLORS.BE_SUB,
           description: `Sous-métier BE ${BE_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
@@ -443,7 +755,7 @@ function buildDefaultBubbles(): Bubble[] {
           pillar,
           lod,
           x: frame.x + 130 + index * 125,
-          y: frame.y + 270,
+          y: frame.y + 285,
           color: FAMILY_COLORS.BM_SUB,
           description: `Sous-métier BM ${BM_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
@@ -451,6 +763,9 @@ function buildDefaultBubbles(): Bubble[] {
       });
 
       SIM_SUB_TRADES.forEach((subTrade, index) => {
+        const col = index % 3;
+        const row = Math.floor(index / 3);
+
         bubbles.push({
           id: `${lod}_${pillar}_SIM_SUB_${subTrade}`,
           label: SIM_SUB_TRADE_LABELS[subTrade],
@@ -458,8 +773,8 @@ function buildDefaultBubbles(): Bubble[] {
           family: "SIMULATION",
           pillar,
           lod,
-          x: frame.x + 95 + index * 125,
-          y: frame.y + 350,
+          x: frame.x + 95 + col * 150,
+          y: frame.y + 365 + row * 64,
           color: FAMILY_COLORS.SIMULATION,
           description: `Sous-métier SIM ${SIM_SUB_TRADE_LABELS[subTrade]} disponible pour ${PILLAR_LABELS[pillar]} dans l’onglet ${lod}.`,
           visibleDefault: false,
@@ -526,6 +841,8 @@ export default function ViewerPage() {
   const [linkSelectionIds, setLinkSelectionIds] = useState<string[]>([]);
 
   const [moveEnabled, setMoveEnabled] = useState(true);
+  const [focusEnabled, setFocusEnabled] = useState(false);
+
   const [search, setSearch] = useState("");
   const [familyFilter, setFamilyFilter] = useState<BubbleFamily | "ALL">("ALL");
   const [pillarFilter, setPillarFilter] = useState<Pillar | "ALL">("ALL");
@@ -538,6 +855,30 @@ export default function ViewerPage() {
 
   const [linkLabel, setLinkLabel] = useState<string>("Lien");
   const [linkColor, setLinkColor] = useState<string>("#cbd5e1");
+
+  const [selectedFunctionSubTrade, setSelectedFunctionSubTrade] =
+    useState<SubTradeKey>("BE_MECA");
+  const [selectedFunctionId, setSelectedFunctionId] =
+    useState<string>("F_BE_MECA_01");
+  const [functionTargetLods, setFunctionTargetLods] = useState<
+    Record<LOD, boolean>
+  >({
+    LOD1: true,
+    LOD2: false,
+    LOD3: false,
+  });
+  const [functionImpactPillars, setFunctionImpactPillars] = useState<
+    Record<Pillar, boolean>
+  >({
+    PIECE: true,
+    HP: true,
+    GPE: true,
+  });
+  const [functionImpactLevel, setFunctionImpactLevel] =
+    useState<ImpactLevel>("Critique");
+  const [functionNote, setFunctionNote] = useState("");
+  const [createGeometryLinks, setCreateGeometryLinks] = useState(true);
+  const [autoShowTools, setAutoShowTools] = useState(false);
 
   const computedPillarFrames = useMemo(() => {
     const frames = {} as Record<Pillar, PillarFrame>;
@@ -574,6 +915,48 @@ export default function ViewerPage() {
   const bubbleById = useMemo(() => {
     return new Map(bubbles.map((bubble) => [bubble.id, bubble]));
   }, [bubbles]);
+
+  const functionOptionsForSubTrade = useMemo(() => {
+    return FUNCTION_DEFINITIONS.filter(
+      (definition) => definition.subTrade === selectedFunctionSubTrade
+    );
+  }, [selectedFunctionSubTrade]);
+
+  const selectedFunctionDefinition = useMemo(() => {
+    return (
+      getFunctionDefinition(selectedFunctionId) ??
+      functionOptionsForSubTrade[0] ??
+      FUNCTION_DEFINITIONS[0]
+    );
+  }, [selectedFunctionId, functionOptionsForSubTrade]);
+
+  useEffect(() => {
+    const firstFunction = FUNCTION_DEFINITIONS.find(
+      (definition) => definition.subTrade === selectedFunctionSubTrade
+    );
+
+    if (!firstFunction) return;
+
+    setSelectedFunctionId(firstFunction.id);
+  }, [selectedFunctionSubTrade]);
+
+  useEffect(() => {
+    if (!selectedFunctionDefinition) return;
+
+    setFunctionImpactPillars({
+      PIECE: selectedFunctionDefinition.defaultPillars.includes("PIECE"),
+      HP: selectedFunctionDefinition.defaultPillars.includes("HP"),
+      GPE: selectedFunctionDefinition.defaultPillars.includes("GPE"),
+    });
+
+    setFunctionTargetLods({
+      LOD1: selectedFunctionDefinition.defaultLods.includes("LOD1"),
+      LOD2: selectedFunctionDefinition.defaultLods.includes("LOD2"),
+      LOD3: selectedFunctionDefinition.defaultLods.includes("LOD3"),
+    });
+
+    setFunctionImpactLevel(selectedFunctionDefinition.defaultLevel);
+  }, [selectedFunctionDefinition]);
 
   useEffect(() => {
     try {
@@ -758,7 +1141,9 @@ export default function ViewerPage() {
         bubble.label.toLowerCase().includes(searchValue) ||
         bubble.subtitle.toLowerCase().includes(searchValue) ||
         bubble.description.toLowerCase().includes(searchValue) ||
-        bubble.family.toLowerCase().includes(searchValue);
+        bubble.family.toLowerCase().includes(searchValue) ||
+        bubble.functionMeta?.note.toLowerCase().includes(searchValue) ||
+        bubble.functionMeta?.tools.join(" ").toLowerCase().includes(searchValue);
 
       const matchFamily =
         familyFilter === "ALL" || bubble.family === familyFilter;
@@ -802,6 +1187,26 @@ export default function ViewerPage() {
     );
   }, [activeLodLinks]);
 
+  const focusRelatedIds = useMemo(() => {
+    const ids = new Set<string>();
+
+    if (!selectedBubbleId) return ids;
+
+    ids.add(selectedBubbleId);
+
+    for (const link of activeLodLinks) {
+      if (link.sourceId === selectedBubbleId) {
+        ids.add(link.targetId);
+      }
+
+      if (link.targetId === selectedBubbleId) {
+        ids.add(link.sourceId);
+      }
+    }
+
+    return ids;
+  }, [selectedBubbleId, activeLodLinks]);
+
   const selectedPairExistingLinks = useMemo(() => {
     if (selectedLinkBubbles.length !== 2) return [];
 
@@ -816,6 +1221,12 @@ export default function ViewerPage() {
       return sameDirection || reverseDirection;
     });
   }, [selectedLinkBubbles, activeLodLinks]);
+
+  const activeFunctionBubbles = useMemo(() => {
+    return activeLodBubbles.filter(
+      (bubble) => bubble.family === "FONCTION" && bubble.functionMeta
+    );
+  }, [activeLodBubbles]);
 
   function getSvgPoint(event: ReactPointerEvent<SVGElement>): Position {
     const svg = svgRef.current;
@@ -995,6 +1406,124 @@ export default function ViewerPage() {
 
   function resetAllPillarFrames() {
     setPillarFrameSizes(DEFAULT_PILLAR_FRAME_SIZES);
+  }
+
+  function toggleFunctionPillar(pillar: Pillar) {
+    setFunctionImpactPillars((previous) => ({
+      ...previous,
+      [pillar]: !previous[pillar],
+    }));
+  }
+
+  function toggleFunctionLod(lod: LOD) {
+    setFunctionTargetLods((previous) => ({
+      ...previous,
+      [lod]: !previous[lod],
+    }));
+  }
+
+  function showToolBubblesForFunction(definition: FunctionDefinition, lods: LOD[]) {
+    setBubbleOverrides((previous) => {
+      const next = { ...previous };
+
+      for (const lod of lods) {
+        for (const tool of definition.tools) {
+          const id = `${lod}_TOOL_${tool}`;
+          next[id] = {
+            ...next[id],
+            visible: true,
+          };
+        }
+      }
+
+      return next;
+    });
+  }
+
+  function createFunctionImpactBubbles() {
+    if (!selectedFunctionDefinition) return;
+
+    const targetLods = LODS.filter((lod) => functionTargetLods[lod]);
+    const impactedPillars = PILLARS.filter((pillar) => functionImpactPillars[pillar]);
+
+    if (targetLods.length === 0 || impactedPillars.length === 0) return;
+
+    const timestamp = Date.now();
+    const newBubbles: Bubble[] = [];
+    const newLinks: BubbleLink[] = [];
+
+    for (const lod of targetLods) {
+      const existingFunctionCount = [...customBubbles, ...newBubbles].filter(
+        (bubble) => bubble.lod === lod && bubble.family === "FONCTION"
+      ).length;
+
+      const averageX =
+        impactedPillars.reduce((sum, pillar) => {
+          const frame = computedPillarFrames[pillar];
+          return sum + frame.x + frame.w / 2;
+        }, 0) / impactedPillars.length;
+
+      const topPillar = impactedPillars[0];
+      const firstFrame = computedPillarFrames[topPillar];
+
+      const id = `FUNCTION_${lod}_${selectedFunctionDefinition.id}_${timestamp}_${existingFunctionCount}`;
+
+      const functionBubble: Bubble = {
+        id,
+        label: selectedFunctionDefinition.label,
+        subtitle: `${lod} · ${SUB_TRADE_LABELS[selectedFunctionDefinition.subTrade]} · Fonction`,
+        family: "FONCTION",
+        pillar: impactedPillars.length === 1 ? impactedPillars[0] : undefined,
+        lod,
+        x: averageX,
+        y: firstFrame.y + 500 + (existingFunctionCount % 7) * 58,
+        color: IMPACT_COLORS[functionImpactLevel],
+        description: `${selectedFunctionDefinition.description} Impact ${functionImpactLevel}. Piliers impactés : ${impactedPillars.map((pillar) => PILLAR_LABELS[pillar]).join(", ")}. Outils : ${selectedFunctionDefinition.tools.map((tool) => TOOL_LABELS[tool]).join(", ")}.`,
+        visibleDefault: true,
+        isCustom: true,
+        functionMeta: {
+          functionId: selectedFunctionDefinition.id,
+          subTrade: selectedFunctionDefinition.subTrade,
+          impactedPillars,
+          impactLevel: functionImpactLevel,
+          tools: selectedFunctionDefinition.tools,
+          note: functionNote.trim(),
+        },
+      };
+
+      newBubbles.push(functionBubble);
+
+      if (createGeometryLinks) {
+        for (const pillar of impactedPillars) {
+          newLinks.push({
+            id: `LINK_FUNCTION_GEOM_${lod}_${pillar}_${timestamp}_${Math.round(
+              Math.random() * 100000
+            )}`,
+            lod,
+            sourceId: id,
+            targetId: getGeometryAnchorId(lod, pillar),
+            label: `Impact ${functionImpactLevel}`,
+            color: IMPACT_COLORS[functionImpactLevel],
+          });
+        }
+      }
+    }
+
+    setCustomBubbles((previous) => [...previous, ...newBubbles]);
+
+    if (newLinks.length > 0) {
+      setBubbleLinks((previous) => [...previous, ...newLinks]);
+    }
+
+    setSelectedBubbleId(newBubbles[0]?.id ?? selectedBubbleId);
+
+    if (newBubbles[0]) {
+      setLinkSelectionIds([newBubbles[0].id]);
+    }
+
+    if (autoShowTools) {
+      showToolBubblesForFunction(selectedFunctionDefinition, targetLods);
+    }
   }
 
   function addCustomBubble() {
@@ -1214,6 +1743,8 @@ export default function ViewerPage() {
     setSelectedBubbleId("LOD1_PIECE_BE");
     setLinkSelectionIds([]);
     setLinkMode(false);
+    setMoveEnabled(true);
+    setFocusEnabled(false);
     setFreeBubbleText("Nouvelle bulle");
     setFreeBubbleColor("#facc15");
     setLinkLabel("Lien");
@@ -1240,15 +1771,15 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V1.4</p>
-          <h1>Placement libre par LOD avec sidebar harmonisée</h1>
+          <p className="eyebrow">Mini-PLM · Cartographie architecture V2.0</p>
+          <h1>Fonctions métier, impacts géométrie, outils, LOD et piliers</h1>
         </div>
 
         <div className="toolbar">
           <input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="Rechercher une bulle..."
+            placeholder="Rechercher une bulle, fonction, outil..."
           />
 
           <select
@@ -1262,6 +1793,8 @@ export default function ViewerPage() {
             <option value="BE_SUB">Sous-métiers BE</option>
             <option value="BM_SUB">Sous-métiers BM</option>
             <option value="SIMULATION">Sous-métiers SIM</option>
+            <option value="FONCTION">Fonctions</option>
+            <option value="GEOMETRIE">Géométrie</option>
             <option value="OUTIL">Outils</option>
             <option value="LIBRE">Bulles libres</option>
           </select>
@@ -1294,6 +1827,13 @@ export default function ViewerPage() {
             {linkMode ? "Mode lien actif" : "Mode lien"}
           </button>
 
+          <button
+            className={focusEnabled ? "focusButtonActive" : ""}
+            onClick={() => setFocusEnabled((current) => !current)}
+          >
+            {focusEnabled ? "Focus impact actif" : "Focus impact"}
+          </button>
+
           <button onClick={() => setShowLodTabs((current) => !current)}>
             {showLodTabs ? "Masquer onglets LOD" : "Afficher onglets LOD"}
           </button>
@@ -1317,6 +1857,9 @@ export default function ViewerPage() {
             );
             const visibleCount = lodBubbles.filter((bubble) => bubble.visible).length;
             const linkCount = bubbleLinks.filter((link) => link.lod === lod).length;
+            const functionCount = lodBubbles.filter(
+              (bubble) => bubble.family === "FONCTION"
+            ).length;
 
             return (
               <button
@@ -1327,7 +1870,7 @@ export default function ViewerPage() {
                 <strong>{LOD_LABELS[lod]}</strong>
                 <span>{LOD_DETAILS[lod]}</span>
                 <em>
-                  {visibleCount}/{lodBubbles.length} visibles · {linkCount} lien(s)
+                  {visibleCount}/{lodBubbles.length} visibles · {functionCount} fonction(s) · {linkCount} lien(s)
                 </em>
               </button>
             );
@@ -1463,9 +2006,17 @@ export default function ViewerPage() {
             {visibleLinks.map((link) => {
               const midX = (link.source.x + link.target.x) / 2;
               const midY = (link.source.y + link.target.y) / 2;
+              const related =
+                !focusEnabled ||
+                focusRelatedIds.size === 0 ||
+                focusRelatedIds.has(link.sourceId) ||
+                focusRelatedIds.has(link.targetId);
 
               return (
-                <g key={link.id} className="linkGroup">
+                <g
+                  key={link.id}
+                  className={related ? "linkGroup" : "linkGroup linkDimmed"}
+                >
                   <line
                     x1={link.source.x}
                     y1={link.source.y}
@@ -1505,18 +2056,23 @@ export default function ViewerPage() {
               const hasCustomPosition =
                 bubbleOverrides[bubble.id]?.x !== undefined ||
                 bubbleOverrides[bubble.id]?.y !== undefined;
+              const isDimmed =
+                focusEnabled &&
+                focusRelatedIds.size > 0 &&
+                !focusRelatedIds.has(bubble.id);
 
               return (
                 <g
                   key={bubble.id}
                   transform={`translate(${bubble.x}, ${bubble.y})`}
-                  className={
+                  className={[
                     linkMode
                       ? "bubbleGroup bubbleGroupLinkMode"
                       : moveEnabled
                         ? "bubbleGroup bubbleGroupMove"
-                        : "bubbleGroup"
-                  }
+                        : "bubbleGroup",
+                    isDimmed ? "bubbleDimmed" : "",
+                  ].join(" ")}
                   onPointerDown={(event) => startDragBubble(event, bubble)}
                   onClick={(event) => handleBubbleClick(event, bubble)}
                   filter={selected || isLinkSelected ? "url(#bubbleGlow)" : undefined}
@@ -1535,16 +2091,20 @@ export default function ViewerPage() {
                           ? "#ffffff"
                           : hasCustomPosition
                             ? "#facc15"
-                            : "rgba(255,255,255,0.28)"
+                            : bubble.family === "FONCTION"
+                              ? IMPACT_COLORS[bubble.functionMeta?.impactLevel ?? "Fort"]
+                              : "rgba(255,255,255,0.28)"
                     }
                     strokeWidth={
                       isLinkSelected
                         ? 4
                         : selected
                           ? 3.2
-                          : hasCustomPosition
-                            ? 2.6
-                            : 1.6
+                          : bubble.family === "FONCTION"
+                            ? 2.8
+                            : hasCustomPosition
+                              ? 2.6
+                              : 1.6
                     }
                   />
 
@@ -1599,8 +2159,194 @@ export default function ViewerPage() {
                 <span>{LOD_DETAILS[activeLod]}</span>
                 <em>
                   {activeLodVisibleCount}/{activeLodTotalCount} bulles visibles ·{" "}
-                  {activeLodLinks.length} lien(s)
+                  {activeFunctionBubbles.length} fonction(s) · {activeLodLinks.length} lien(s)
                 </em>
+              </div>
+            </PanelShell>
+
+            <PanelShell panelKey="FUNCTION_IMPACT" title="Fonctions métier & impacts géométrie">
+              <div className="functionBuilder">
+                <label>
+                  Sous-métier
+                  <select
+                    value={selectedFunctionSubTrade}
+                    onChange={(event) =>
+                      setSelectedFunctionSubTrade(event.target.value as SubTradeKey)
+                    }
+                  >
+                    {SUB_TRADES.map((subTrade) => (
+                      <option key={subTrade} value={subTrade}>
+                        {SUB_TRADE_LABELS[subTrade]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Fonction
+                  <select
+                    value={selectedFunctionDefinition.id}
+                    onChange={(event) => setSelectedFunctionId(event.target.value)}
+                  >
+                    {functionOptionsForSubTrade.map((definition) => (
+                      <option key={definition.id} value={definition.id}>
+                        {definition.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="functionDescription">
+                  <strong>{selectedFunctionDefinition.label}</strong>
+                  <p>{selectedFunctionDefinition.description}</p>
+                </div>
+
+                <div className="functionGrid">
+                  <div>
+                    <span className="miniLabel">LOD cibles</span>
+                    <div className="pillSelector">
+                      {LODS.map((lod) => (
+                        <button
+                          key={lod}
+                          className={functionTargetLods[lod] ? "pillActive" : ""}
+                          onClick={() => toggleFunctionLod(lod)}
+                        >
+                          {lod}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="miniLabel">Géométries impactées</span>
+                    <div className="pillSelector">
+                      {PILLARS.map((pillar) => (
+                        <button
+                          key={pillar}
+                          className={
+                            functionImpactPillars[pillar] ? "pillActive" : ""
+                          }
+                          onClick={() => toggleFunctionPillar(pillar)}
+                        >
+                          {PILLAR_LABELS[pillar]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <label>
+                  Niveau d’impact
+                  <select
+                    value={functionImpactLevel}
+                    onChange={(event) =>
+                      setFunctionImpactLevel(event.target.value as ImpactLevel)
+                    }
+                  >
+                    <option value="Faible">Faible</option>
+                    <option value="Moyen">Moyen</option>
+                    <option value="Fort">Fort</option>
+                    <option value="Critique">Critique</option>
+                  </select>
+                </label>
+
+                <label>
+                  Note libre
+                  <textarea
+                    value={functionNote}
+                    onChange={(event) => setFunctionNote(event.target.value)}
+                    placeholder="Exemple : impact fort sur rayon d’entrée, épaisseur mini, accès outillage..."
+                  />
+                </label>
+
+                <div className="functionOptions">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={createGeometryLinks}
+                      onChange={(event) =>
+                        setCreateGeometryLinks(event.target.checked)
+                      }
+                    />
+                    Créer automatiquement les liens vers Pièce / HP / GPE
+                  </label>
+
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={autoShowTools}
+                      onChange={(event) => setAutoShowTools(event.target.checked)}
+                    />
+                    Afficher les outils associés
+                  </label>
+                </div>
+
+                <div className="toolPills">
+                  {selectedFunctionDefinition.tools.map((tool) => (
+                    <span key={tool}>{TOOL_LABELS[tool]}</span>
+                  ))}
+                </div>
+
+                <button className="mainActionButton" onClick={createFunctionImpactBubbles}>
+                  Créer la fonction et ses impacts
+                </button>
+
+                <div className="impactReadBox">
+                  {PILLARS.map((pillar) => (
+                    <div key={pillar}>
+                      <strong>{PILLAR_LABELS[pillar]}</strong>
+                      <p>{selectedFunctionDefinition.geometryImpact[pillar]}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </PanelShell>
+
+            <PanelShell panelKey="IMPACT_MATRIX" title={`Matrice d’impact · ${activeLod}`}>
+              <div className="impactMatrix">
+                {activeFunctionBubbles.length === 0 ? (
+                  <p className="empty">Aucune fonction créée dans cet onglet.</p>
+                ) : (
+                  activeFunctionBubbles.map((bubble) => {
+                    const meta = bubble.functionMeta;
+                    const definition = meta
+                      ? getFunctionDefinition(meta.functionId)
+                      : undefined;
+
+                    if (!meta || !definition) return null;
+
+                    return (
+                      <button
+                        key={bubble.id}
+                        className={
+                          selectedBubbleId === bubble.id
+                            ? "impactCard impactCardSelected"
+                            : "impactCard"
+                        }
+                        onClick={() => setSelectedBubbleId(bubble.id)}
+                      >
+                        <span
+                          className="impactLevelDot"
+                          style={{ background: IMPACT_COLORS[meta.impactLevel] }}
+                        />
+                        <div>
+                          <strong>{definition.label}</strong>
+                          <small>
+                            {SUB_TRADE_LABELS[meta.subTrade]} · Impact {meta.impactLevel}
+                          </small>
+                          <em>
+                            {meta.impactedPillars
+                              .map((pillar) => PILLAR_LABELS[pillar])
+                              .join(" / ")}
+                          </em>
+                          <span className="impactTools">
+                            {meta.tools.map((tool) => TOOL_LABELS[tool]).join(" · ")}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </PanelShell>
 
@@ -1673,11 +2419,6 @@ export default function ViewerPage() {
                   </button>
                 </div>
               </div>
-
-              <p className="hint">
-                Les dimensions sont sauvegardées dans le navigateur. Les bulles
-                restent déplaçables librement dans les cadres.
-              </p>
             </PanelShell>
 
             <PanelShell panelKey="LINK_EDITOR" title="Créer / casser un lien">
@@ -1755,6 +2496,34 @@ export default function ViewerPage() {
                   </div>
 
                   <p className="description">{selectedBubble.description}</p>
+
+                  {selectedBubble.functionMeta ? (
+                    <div className="functionSelectedBox">
+                      <strong>Fonction métier</strong>
+                      <span>
+                        Sous-métier :{" "}
+                        {SUB_TRADE_LABELS[selectedBubble.functionMeta.subTrade]}
+                      </span>
+                      <span>
+                        Impact : {selectedBubble.functionMeta.impactLevel}
+                      </span>
+                      <span>
+                        Géométries :{" "}
+                        {selectedBubble.functionMeta.impactedPillars
+                          .map((pillar) => PILLAR_LABELS[pillar])
+                          .join(" / ")}
+                      </span>
+                      <span>
+                        Outils :{" "}
+                        {selectedBubble.functionMeta.tools
+                          .map((tool) => TOOL_LABELS[tool])
+                          .join(" · ")}
+                      </span>
+                      {selectedBubble.functionMeta.note ? (
+                        <p>{selectedBubble.functionMeta.note}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div className="positionGrid">
                     <div>
@@ -1887,11 +2656,6 @@ export default function ViewerPage() {
 
                 <button onClick={addCustomBubble}>Ajouter</button>
               </div>
-
-              <p className="hint">
-                Tu peux ajouter une bulle standard ou une bulle texte libre avec
-                sa propre couleur. Elle sera créée uniquement dans l’onglet {activeLod}.
-              </p>
             </PanelShell>
 
             <PanelShell panelKey="BUBBLE_LIBRARY" title={`Bibliothèque des bulles · ${activeLod}`}>
@@ -1962,22 +2726,25 @@ export default function ViewerPage() {
               </div>
             </PanelShell>
 
-            <PanelShell panelKey="READING" title="Lecture V1.4">
+            <PanelShell panelKey="READING" title="Lecture V2.0">
               <ul className="readingList">
                 <li>
-                  <strong>Style corrigé</strong> : les mini-fenêtres sont maintenant cohérentes avec le thème global.
+                  <strong>Fonction métier</strong> : action concrète portée par un sous-métier.
                 </li>
                 <li>
-                  <strong>Correction technique</strong> : le style est appliqué globalement pour couvrir le composant interne PanelShell.
+                  <strong>Impact géométrie</strong> : chaque fonction peut impacter Pièce, HP et/ou GPE.
                 </li>
                 <li>
-                  <strong>Réduction</strong> : le bouton “—” replie la fenêtre.
+                  <strong>Propagation LOD</strong> : une fonction peut être créée directement sur LOD1, LOD2 et LOD3.
                 </li>
                 <li>
-                  <strong>Réouverture</strong> : le bouton “▢” redéploie le contenu.
+                  <strong>Liens automatiques</strong> : la fonction est reliée aux ancres géométriques.
                 </li>
                 <li>
-                  <strong>Sauvegarde</strong> : l’état replié/déplié est conservé dans le navigateur.
+                  <strong>Matrice d’impact</strong> : lecture rapide des fonctions actives sur l’onglet courant.
+                </li>
+                <li>
+                  <strong>Focus impact</strong> : isole visuellement une bulle et ses dépendances.
                 </li>
               </ul>
             </PanelShell>
@@ -2045,7 +2812,7 @@ export default function ViewerPage() {
           flex-wrap: wrap;
           justify-content: flex-end;
           gap: 8px;
-          max-width: 1440px;
+          max-width: 1540px;
         }
 
         .toolbar input,
@@ -2061,9 +2828,12 @@ export default function ViewerPage() {
         .linkCreator button,
         .panelHeaderRow button,
         .frameResizeGrid select,
+        .functionBuilder select,
+        .functionBuilder textarea,
         .quickFrameButtons button,
         .lodTabsCollapsed button,
-        .compactLodButtons button {
+        .compactLodButtons button,
+        .mainActionButton {
           border: 1px solid rgba(148, 163, 184, 0.28);
           background: rgba(15, 23, 42, 0.84);
           color: #e5e7eb;
@@ -2082,7 +2852,8 @@ export default function ViewerPage() {
         .panelHeaderRow button,
         .quickFrameButtons button,
         .lodTabsCollapsed button,
-        .compactLodButtons button {
+        .compactLodButtons button,
+        .mainActionButton {
           cursor: pointer;
           font-weight: 800;
           background: rgba(37, 99, 235, 0.34);
@@ -2094,7 +2865,8 @@ export default function ViewerPage() {
         .libraryActions button:hover,
         .linkCreator button:hover,
         .quickFrameButtons button:hover,
-        .panelHeaderRow button:hover {
+        .panelHeaderRow button:hover,
+        .mainActionButton:hover {
           border-color: rgba(96, 165, 250, 0.58);
           background: rgba(37, 99, 235, 0.48);
         }
@@ -2106,7 +2878,7 @@ export default function ViewerPage() {
         }
 
         .toolbar input {
-          width: 210px;
+          width: 250px;
         }
 
         .addBubbleGrid input[type="color"],
@@ -2128,6 +2900,12 @@ export default function ViewerPage() {
           background: rgba(34, 211, 238, 0.26) !important;
           border-color: rgba(34, 211, 238, 0.58) !important;
           color: #cffafe !important;
+        }
+
+        .focusButtonActive {
+          background: rgba(251, 146, 60, 0.3) !important;
+          border-color: rgba(251, 146, 60, 0.62) !important;
+          color: #ffedd5 !important;
         }
 
         .dangerButton,
@@ -2226,7 +3004,7 @@ export default function ViewerPage() {
 
         .layout {
           display: grid;
-          grid-template-columns: minmax(0, 1fr) 430px;
+          grid-template-columns: minmax(0, 1fr) 470px;
           gap: 18px;
           align-items: stretch;
           position: relative;
@@ -2313,6 +3091,11 @@ export default function ViewerPage() {
 
         .linkGroup {
           pointer-events: none;
+          transition: opacity 0.18s ease;
+        }
+
+        .linkDimmed {
+          opacity: 0.14;
         }
 
         .linkLabelBackground {
@@ -2330,6 +3113,10 @@ export default function ViewerPage() {
         .bubbleGroup {
           cursor: pointer;
           transition: opacity 0.16s ease;
+        }
+
+        .bubbleDimmed {
+          opacity: 0.16;
         }
 
         .bubbleGroupMove {
@@ -2552,6 +3339,215 @@ export default function ViewerPage() {
           font-style: normal;
         }
 
+        .functionBuilder {
+          display: grid;
+          gap: 12px;
+        }
+
+        .functionBuilder label {
+          display: grid;
+          gap: 6px;
+          color: #cbd5e1;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .functionBuilder select,
+        .functionBuilder textarea {
+          width: 100%;
+        }
+
+        .functionBuilder textarea {
+          min-height: 74px;
+          resize: vertical;
+          line-height: 1.4;
+        }
+
+        .functionDescription {
+          border: 1px solid rgba(251, 146, 60, 0.24);
+          background: rgba(67, 20, 7, 0.28);
+          border-radius: 14px;
+          padding: 11px;
+        }
+
+        .functionDescription strong {
+          display: block;
+          color: #fed7aa;
+          font-size: 13px;
+          margin-bottom: 5px;
+        }
+
+        .functionDescription p {
+          margin: 0;
+          color: #cbd5e1;
+          font-size: 12.5px;
+          line-height: 1.45;
+        }
+
+        .functionGrid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+
+        .miniLabel {
+          display: block;
+          color: #93c5fd;
+          font-size: 11px;
+          font-weight: 900;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          margin-bottom: 7px;
+        }
+
+        .pillSelector {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .pillSelector button {
+          border: 1px solid rgba(148, 163, 184, 0.22);
+          background: rgba(15, 23, 42, 0.84);
+          color: #cbd5e1;
+          border-radius: 999px;
+          padding: 7px 9px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 800;
+        }
+
+        .pillSelector .pillActive {
+          background: rgba(14, 165, 233, 0.28);
+          border-color: rgba(56, 189, 248, 0.54);
+          color: #e0f2fe;
+        }
+
+        .functionOptions {
+          display: grid;
+          gap: 8px;
+        }
+
+        .functionOptions label {
+          display: flex;
+          flex-direction: row;
+          gap: 8px;
+          align-items: center;
+          color: #cbd5e1;
+          font-size: 12.5px;
+          font-weight: 700;
+        }
+
+        .functionOptions input {
+          accent-color: #38bdf8;
+        }
+
+        .toolPills {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+        }
+
+        .toolPills span {
+          border: 1px solid rgba(56, 189, 248, 0.28);
+          background: rgba(8, 47, 73, 0.34);
+          color: #bae6fd;
+          border-radius: 999px;
+          padding: 6px 9px;
+          font-size: 11.5px;
+          font-weight: 800;
+        }
+
+        .mainActionButton {
+          background: rgba(251, 146, 60, 0.24);
+          border-color: rgba(251, 146, 60, 0.48);
+          color: #ffedd5;
+        }
+
+        .impactReadBox {
+          display: grid;
+          gap: 8px;
+        }
+
+        .impactReadBox div {
+          border: 1px solid rgba(148, 163, 184, 0.14);
+          background: rgba(2, 6, 23, 0.4);
+          border-radius: 12px;
+          padding: 9px;
+        }
+
+        .impactReadBox strong {
+          display: block;
+          color: #f8fafc;
+          font-size: 12.5px;
+          margin-bottom: 3px;
+        }
+
+        .impactReadBox p {
+          margin: 0;
+          color: #94a3b8;
+          font-size: 12px;
+          line-height: 1.35;
+        }
+
+        .impactMatrix {
+          display: grid;
+          gap: 8px;
+          max-height: 320px;
+          overflow: auto;
+          padding-right: 4px;
+        }
+
+        .impactCard {
+          width: 100%;
+          display: grid;
+          grid-template-columns: 12px 1fr;
+          gap: 9px;
+          align-items: flex-start;
+          border: 1px solid rgba(148, 163, 184, 0.16);
+          background: rgba(2, 6, 23, 0.42);
+          color: #e5e7eb;
+          border-radius: 14px;
+          padding: 10px;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .impactCardSelected {
+          border-color: rgba(251, 146, 60, 0.6);
+          background: rgba(67, 20, 7, 0.32);
+        }
+
+        .impactLevelDot {
+          width: 10px;
+          height: 100%;
+          min-height: 50px;
+          border-radius: 999px;
+          margin-top: 2px;
+        }
+
+        .impactCard strong {
+          display: block;
+          font-size: 13px;
+          color: #f8fafc;
+          margin-bottom: 3px;
+        }
+
+        .impactCard small,
+        .impactCard em,
+        .impactTools {
+          display: block;
+          color: #94a3b8;
+          font-size: 12px;
+          font-style: normal;
+          line-height: 1.35;
+        }
+
+        .impactTools {
+          color: #bae6fd;
+          margin-top: 3px;
+        }
+
         .frameResizeGrid {
           display: grid;
           gap: 10px;
@@ -2658,6 +3654,29 @@ export default function ViewerPage() {
           font-size: 13px;
           line-height: 1.55;
           margin: 0 0 14px 0;
+        }
+
+        .functionSelectedBox {
+          display: grid;
+          gap: 5px;
+          border: 1px solid rgba(251, 146, 60, 0.26);
+          background: rgba(67, 20, 7, 0.25);
+          border-radius: 14px;
+          padding: 11px;
+          margin-bottom: 12px;
+        }
+
+        .functionSelectedBox strong {
+          color: #fed7aa;
+          font-size: 13px;
+        }
+
+        .functionSelectedBox span,
+        .functionSelectedBox p {
+          margin: 0;
+          color: #cbd5e1;
+          font-size: 12.5px;
+          line-height: 1.35;
         }
 
         .positionGrid {
@@ -2916,7 +3935,8 @@ export default function ViewerPage() {
           .addBubbleGridFree,
           .linkCreator,
           .linkSelectionBox,
-          .quickFrameButtons {
+          .quickFrameButtons,
+          .functionGrid {
             grid-template-columns: 1fr;
           }
 
