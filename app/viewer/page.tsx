@@ -4,11 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  ReactNode,
 } from "react";
 
 type Pillar = "PIECE" | "HP" | "GPE";
 type LOD = "LOD1" | "LOD2" | "LOD3";
-
 type Entity = "BE" | "BM" | "SIM" | "FA" | "CND";
 
 type ToolName =
@@ -50,6 +50,16 @@ type BubbleFamily =
   | "SIMULATION"
   | "OUTIL"
   | "LIBRE";
+
+type PanelKey =
+  | "ACTIVE_LOD"
+  | "FRAME_RESIZE"
+  | "LINK_EDITOR"
+  | "SELECTED_BUBBLE"
+  | "LINKS"
+  | "ADD_BUBBLE"
+  | "BUBBLE_LIBRARY"
+  | "READING";
 
 type Position = {
   x: number;
@@ -116,6 +126,7 @@ const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v5";
 const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v5";
 const LS_BUBBLE_LINKS = "plm_free_bubble_links_v3";
 const LS_PILLAR_FRAME_SIZES = "plm_pillar_frame_sizes_v1";
+const LS_COLLAPSED_PANELS = "plm_sidebar_collapsed_panels_v1";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -233,6 +244,28 @@ const PILLAR_COLORS: Record<Pillar, string> = {
   PIECE: "#38bdf8",
   HP: "#facc15",
   GPE: "#c084fc",
+};
+
+const PANEL_ICONS: Record<PanelKey, string> = {
+  ACTIVE_LOD: "◉",
+  FRAME_RESIZE: "□",
+  LINK_EDITOR: "↔",
+  SELECTED_BUBBLE: "●",
+  LINKS: "⛓",
+  ADD_BUBBLE: "+",
+  BUBBLE_LIBRARY: "▤",
+  READING: "ⓘ",
+};
+
+const DEFAULT_COLLAPSED_PANELS: Record<PanelKey, boolean> = {
+  ACTIVE_LOD: false,
+  FRAME_RESIZE: false,
+  LINK_EDITOR: false,
+  SELECTED_BUBBLE: false,
+  LINKS: false,
+  ADD_BUBBLE: false,
+  BUBBLE_LIBRARY: false,
+  READING: false,
 };
 
 const BASE_PILLAR_FRAMES: Record<Pillar, PillarFrame> = {
@@ -481,6 +514,10 @@ export default function ViewerPage() {
   const [showLodTabs, setShowLodTabs] = useState(true);
   const [showSidePanel, setShowSidePanel] = useState(true);
 
+  const [collapsedPanels, setCollapsedPanels] = useState<
+    Record<PanelKey, boolean>
+  >(DEFAULT_COLLAPSED_PANELS);
+
   const [selectedBubbleId, setSelectedBubbleId] = useState<string>(
     "LOD1_PIECE_BE"
   );
@@ -544,6 +581,7 @@ export default function ViewerPage() {
       const rawCustomBubbles = window.localStorage.getItem(LS_CUSTOM_BUBBLES);
       const rawLinks = window.localStorage.getItem(LS_BUBBLE_LINKS);
       const rawFrameSizes = window.localStorage.getItem(LS_PILLAR_FRAME_SIZES);
+      const rawCollapsedPanels = window.localStorage.getItem(LS_COLLAPSED_PANELS);
 
       if (rawOverrides) {
         setBubbleOverrides(
@@ -564,11 +602,19 @@ export default function ViewerPage() {
           JSON.parse(rawFrameSizes) as Record<Pillar, PillarFrameSize>
         );
       }
+
+      if (rawCollapsedPanels) {
+        setCollapsedPanels({
+          ...DEFAULT_COLLAPSED_PANELS,
+          ...(JSON.parse(rawCollapsedPanels) as Record<PanelKey, boolean>),
+        });
+      }
     } catch {
       setBubbleOverrides({});
       setCustomBubbles([]);
       setBubbleLinks([]);
       setPillarFrameSizes(DEFAULT_PILLAR_FRAME_SIZES);
+      setCollapsedPanels(DEFAULT_COLLAPSED_PANELS);
     } finally {
       storageLoadedRef.current = true;
     }
@@ -576,7 +622,6 @@ export default function ViewerPage() {
 
   useEffect(() => {
     if (!storageLoadedRef.current) return;
-
     window.localStorage.setItem(
       LS_BUBBLE_OVERRIDES,
       JSON.stringify(bubbleOverrides)
@@ -585,7 +630,6 @@ export default function ViewerPage() {
 
   useEffect(() => {
     if (!storageLoadedRef.current) return;
-
     window.localStorage.setItem(
       LS_CUSTOM_BUBBLES,
       JSON.stringify(customBubbles)
@@ -594,18 +638,24 @@ export default function ViewerPage() {
 
   useEffect(() => {
     if (!storageLoadedRef.current) return;
-
     window.localStorage.setItem(LS_BUBBLE_LINKS, JSON.stringify(bubbleLinks));
   }, [bubbleLinks]);
 
   useEffect(() => {
     if (!storageLoadedRef.current) return;
-
     window.localStorage.setItem(
       LS_PILLAR_FRAME_SIZES,
       JSON.stringify(pillarFrameSizes)
     );
   }, [pillarFrameSizes]);
+
+  useEffect(() => {
+    if (!storageLoadedRef.current) return;
+    window.localStorage.setItem(
+      LS_COLLAPSED_PANELS,
+      JSON.stringify(collapsedPanels)
+    );
+  }, [collapsedPanels]);
 
   useEffect(() => {
     if (newBubbleFamily === "LIBRE") return;
@@ -616,6 +666,49 @@ export default function ViewerPage() {
       setNewBubbleValue(firstOption.value);
     }
   }, [newBubbleFamily]);
+
+  function PanelShell({
+    panelKey,
+    title,
+    children,
+  }: {
+    panelKey: PanelKey;
+    title: string;
+    children: ReactNode;
+  }) {
+    const collapsed = collapsedPanels[panelKey];
+
+    return (
+      <section className={collapsed ? "panelBlock panelBlockCollapsed" : "panelBlock"}>
+        <button
+          type="button"
+          className="panelTitleBar"
+          onClick={() =>
+            setCollapsedPanels((previous) => ({
+              ...previous,
+              [panelKey]: !previous[panelKey],
+            }))
+          }
+        >
+          <span className="panelTitleLeft">
+            <span className="panelIcon">{PANEL_ICONS[panelKey]}</span>
+            <span className="panelTitleText">{title}</span>
+          </span>
+
+          <span className="windowControls">
+            <span className="windowControlDot windowControlRed" />
+            <span className="windowControlDot windowControlYellow" />
+            <span className="windowControlDot windowControlGreen" />
+            <span className="windowMinimizeButton">
+              {collapsed ? "▢" : "—"}
+            </span>
+          </span>
+        </button>
+
+        {!collapsed ? <div className="panelBody">{children}</div> : null}
+      </section>
+    );
+  }
 
   function changeActiveLod(nextLod: LOD) {
     setActiveLod(nextLod);
@@ -784,10 +877,7 @@ export default function ViewerPage() {
     setSelectedBubbleId(bubble.id);
     addBubbleToLinkSelection(bubble.id);
 
-    if (linkMode) {
-      return;
-    }
-
+    if (linkMode) return;
     if (!moveEnabled) return;
 
     event.preventDefault();
@@ -1116,6 +1206,7 @@ export default function ViewerPage() {
     setCustomBubbles([]);
     setBubbleLinks([]);
     setPillarFrameSizes(DEFAULT_PILLAR_FRAME_SIZES);
+    setCollapsedPanels(DEFAULT_COLLAPSED_PANELS);
     setSearch("");
     setFamilyFilter("ALL");
     setPillarFilter("ALL");
@@ -1134,6 +1225,7 @@ export default function ViewerPage() {
     window.localStorage.removeItem(LS_CUSTOM_BUBBLES);
     window.localStorage.removeItem(LS_BUBBLE_LINKS);
     window.localStorage.removeItem(LS_PILLAR_FRAME_SIZES);
+    window.localStorage.removeItem(LS_COLLAPSED_PANELS);
   }
 
   const newBubbleOptions = getOptionsForFamily(newBubbleFamily);
@@ -1142,15 +1234,14 @@ export default function ViewerPage() {
     (bubble) => bubble.visible
   ).length;
   const activeLodTotalCount = activeLodBubbles.length;
-
   const selectedFrame = pillarFrameSizes[selectedFramePillar];
 
   return (
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V1.2</p>
-          <h1>Placement libre par LOD avec panneaux repliables et cadres ajustables</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V1.3</p>
+          <h1>Placement libre par LOD avec fenêtres fonctionnelles rétractables</h1>
         </div>
 
         <div className="toolbar">
@@ -1502,9 +1593,7 @@ export default function ViewerPage() {
               <button onClick={() => setShowSidePanel(false)}>Replier</button>
             </div>
 
-            <div className="panelBlock">
-              <p className="panelLabel">Onglet actif</p>
-
+            <PanelShell panelKey="ACTIVE_LOD" title="Onglet actif">
               <div className="lodStatusCard">
                 <strong>{LOD_LABELS[activeLod]}</strong>
                 <span>{LOD_DETAILS[activeLod]}</span>
@@ -1513,11 +1602,9 @@ export default function ViewerPage() {
                   {activeLodLinks.length} lien(s)
                 </em>
               </div>
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
-              <p className="panelLabel">Ajuster les cadres des piliers</p>
-
+            <PanelShell panelKey="FRAME_RESIZE" title="Ajuster les cadres des piliers">
               <div className="frameResizeGrid">
                 <label>
                   Pilier
@@ -1591,11 +1678,9 @@ export default function ViewerPage() {
                 Les dimensions sont sauvegardées dans le navigateur. Les bulles
                 restent déplaçables librement dans les cadres.
               </p>
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
-              <p className="panelLabel">Créer / casser un lien</p>
-
+            <PanelShell panelKey="LINK_EDITOR" title="Créer / casser un lien">
               <div className="linkSelectionBox">
                 <div>
                   <span>Bulle 1</span>
@@ -1647,11 +1732,9 @@ export default function ViewerPage() {
                 Liens existants entre les deux bulles sélectionnées :{" "}
                 <strong>{selectedPairExistingLinks.length}</strong>.
               </p>
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
-              <p className="panelLabel">Bulle sélectionnée</p>
-
+            <PanelShell panelKey="SELECTED_BUBBLE" title="Bulle sélectionnée">
               {selectedBubble ? (
                 <>
                   <div className="selectedHeader">
@@ -1702,12 +1785,11 @@ export default function ViewerPage() {
               ) : (
                 <p className="empty">Aucune bulle sélectionnée.</p>
               )}
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
+            <PanelShell panelKey="LINKS" title={`Liens · ${activeLod}`}>
               <div className="libraryHeader">
                 <div>
-                  <p className="panelLabel">Liens · {activeLod}</p>
                   <p className="libraryCount">
                     {activeLodLinks.length} lien(s) dans l’onglet actif
                   </p>
@@ -1753,11 +1835,9 @@ export default function ViewerPage() {
                   ))
                 )}
               </div>
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
-              <p className="panelLabel">Ajouter une bulle libre dans {activeLod}</p>
-
+            <PanelShell panelKey="ADD_BUBBLE" title={`Ajouter une bulle libre dans ${activeLod}`}>
               <div
                 className={
                   newBubbleFamily === "LIBRE"
@@ -1814,12 +1894,11 @@ export default function ViewerPage() {
                 Tu peux ajouter une bulle standard ou une bulle texte libre avec
                 sa propre couleur. Elle sera créée uniquement dans l’onglet {activeLod}.
               </p>
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
+            <PanelShell panelKey="BUBBLE_LIBRARY" title={`Bibliothèque des bulles · ${activeLod}`}>
               <div className="libraryHeader">
                 <div>
-                  <p className="panelLabel">Bibliothèque des bulles · {activeLod}</p>
                   <p className="libraryCount">
                     {filteredBubbles.length} bulle(s) dans la sélection
                   </p>
@@ -1885,26 +1964,27 @@ export default function ViewerPage() {
                   ))
                 )}
               </div>
-            </div>
+            </PanelShell>
 
-            <div className="panelBlock">
-              <p className="panelLabel">Lecture V1.2</p>
-
+            <PanelShell panelKey="READING" title="Lecture V1.3">
               <ul className="readingList">
                 <li>
-                  <strong>Onglets LOD repliables</strong> : masquer/redéployer pour gagner de la place.
+                  <strong>Fenêtres fonctionnelles</strong> : chaque bloc de la side bar a une barre de titre.
                 </li>
                 <li>
-                  <strong>Panneau latéral repliable</strong> : le viewer prend toute la largeur.
+                  <strong>Icône</strong> : chaque fonctionnalité possède une petite icône.
                 </li>
                 <li>
-                  <strong>Cadres ajustables</strong> : largeur/hauteur modifiables pour Pièce, HP et GPE.
+                  <strong>Réduction</strong> : le bouton “—” replie la fenêtre comme une fenêtre Windows.
                 </li>
                 <li>
-                  <strong>Sauvegarde</strong> : les dimensions des cadres sont persistées dans le navigateur.
+                  <strong>Réouverture</strong> : le bouton “▢” redéploie le contenu.
+                </li>
+                <li>
+                  <strong>Sauvegarde</strong> : l’état replié/déplié est conservé dans le navigateur.
                 </li>
               </ul>
-            </div>
+            </PanelShell>
           </aside>
         ) : (
           <button
@@ -2316,18 +2396,113 @@ export default function ViewerPage() {
         .panelBlock {
           border: 1px solid rgba(148, 163, 184, 0.2);
           background: rgba(15, 23, 42, 0.84);
-          border-radius: 22px;
-          padding: 16px;
+          border-radius: 18px;
+          overflow: hidden;
           box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
         }
 
-        .panelLabel {
-          margin: 0 0 12px 0;
-          font-size: 11px;
-          font-weight: 850;
+        .panelBlockCollapsed {
+          background: rgba(15, 23, 42, 0.72);
+        }
+
+        .panelTitleBar {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          border: 0;
+          border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+          background:
+            linear-gradient(90deg, rgba(30, 64, 175, 0.38), rgba(15, 23, 42, 0.86));
+          color: #e5e7eb;
+          padding: 10px 12px;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .panelBlockCollapsed .panelTitleBar {
+          border-bottom: 0;
+        }
+
+        .panelTitleLeft {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+
+        .panelIcon {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 24px;
+          height: 24px;
+          border-radius: 8px;
+          background: rgba(56, 189, 248, 0.16);
+          border: 1px solid rgba(56, 189, 248, 0.26);
           color: #93c5fd;
+          font-size: 13px;
+          font-weight: 900;
+          flex: 0 0 auto;
+        }
+
+        .panelTitleText {
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          color: #dbeafe;
+          font-size: 11px;
+          font-weight: 950;
           text-transform: uppercase;
           letter-spacing: 0.13em;
+        }
+
+        .windowControls {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex: 0 0 auto;
+        }
+
+        .windowControlDot {
+          width: 8px;
+          height: 8px;
+          border-radius: 999px;
+          opacity: 0.75;
+        }
+
+        .windowControlRed {
+          background: #f87171;
+        }
+
+        .windowControlYellow {
+          background: #facc15;
+        }
+
+        .windowControlGreen {
+          background: #34d399;
+        }
+
+        .windowMinimizeButton {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          width: 26px;
+          height: 22px;
+          border-radius: 7px;
+          margin-left: 3px;
+          background: rgba(15, 23, 42, 0.78);
+          border: 1px solid rgba(148, 163, 184, 0.28);
+          color: #f8fafc;
+          font-size: 12px;
+          font-weight: 900;
+          line-height: 1;
+        }
+
+        .panelBody {
+          padding: 16px;
         }
 
         .lodStatusCard {
@@ -2403,10 +2578,6 @@ export default function ViewerPage() {
           align-items: flex-start;
           gap: 12px;
           margin-bottom: 12px;
-        }
-
-        .libraryHeader .panelLabel {
-          margin-bottom: 4px;
         }
 
         .libraryCount {
