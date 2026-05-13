@@ -126,7 +126,7 @@ const LS_BUBBLE_OVERRIDES = "plm_free_bubbles_lod_tabs_subtrades_overrides_v5";
 const LS_CUSTOM_BUBBLES = "plm_free_custom_bubbles_lod_tabs_subtrades_v5";
 const LS_BUBBLE_LINKS = "plm_free_bubble_links_v3";
 const LS_PILLAR_FRAME_SIZES = "plm_pillar_frame_sizes_v1";
-const LS_COLLAPSED_PANELS = "plm_sidebar_collapsed_panels_v1";
+const LS_COLLAPSED_PANELS = "plm_sidebar_collapsed_panels_v2";
 
 const PILLARS = ["PIECE", "HP", "GPE"] as const;
 const LODS = ["LOD1", "LOD2", "LOD3"] as const;
@@ -1240,8 +1240,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V1.3</p>
-          <h1>Placement libre par LOD avec fenêtres fonctionnelles rétractables</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V1.4</p>
+          <h1>Placement libre par LOD avec sidebar harmonisée</h1>
         </div>
 
         <div className="toolbar">
@@ -1789,11 +1789,9 @@ export default function ViewerPage() {
 
             <PanelShell panelKey="LINKS" title={`Liens · ${activeLod}`}>
               <div className="libraryHeader">
-                <div>
-                  <p className="libraryCount">
-                    {activeLodLinks.length} lien(s) dans l’onglet actif
-                  </p>
-                </div>
+                <p className="libraryCount">
+                  {activeLodLinks.length} lien(s) dans l’onglet actif
+                </p>
 
                 <div className="libraryActions">
                   <button className="dangerButton" onClick={deleteAllActiveLodLinks}>
@@ -1898,11 +1896,9 @@ export default function ViewerPage() {
 
             <PanelShell panelKey="BUBBLE_LIBRARY" title={`Bibliothèque des bulles · ${activeLod}`}>
               <div className="libraryHeader">
-                <div>
-                  <p className="libraryCount">
-                    {filteredBubbles.length} bulle(s) dans la sélection
-                  </p>
-                </div>
+                <p className="libraryCount">
+                  {filteredBubbles.length} bulle(s) dans la sélection
+                </p>
 
                 <div className="libraryActions">
                   <button onClick={showFilteredBubbles}>Tout cocher</button>
@@ -1966,16 +1962,16 @@ export default function ViewerPage() {
               </div>
             </PanelShell>
 
-            <PanelShell panelKey="READING" title="Lecture V1.3">
+            <PanelShell panelKey="READING" title="Lecture V1.4">
               <ul className="readingList">
                 <li>
-                  <strong>Fenêtres fonctionnelles</strong> : chaque bloc de la side bar a une barre de titre.
+                  <strong>Style corrigé</strong> : les mini-fenêtres sont maintenant cohérentes avec le thème global.
                 </li>
                 <li>
-                  <strong>Icône</strong> : chaque fonctionnalité possède une petite icône.
+                  <strong>Correction technique</strong> : le style est appliqué globalement pour couvrir le composant interne PanelShell.
                 </li>
                 <li>
-                  <strong>Réduction</strong> : le bouton “—” replie la fenêtre comme une fenêtre Windows.
+                  <strong>Réduction</strong> : le bouton “—” replie la fenêtre.
                 </li>
                 <li>
                   <strong>Réouverture</strong> : le bouton “▢” redéploie le contenu.
@@ -1996,7 +1992,7 @@ export default function ViewerPage() {
         )}
       </section>
 
-      <style jsx>{`
+      <style jsx global>{`
         .viewerPage {
           min-height: 100vh;
           background:
@@ -2013,6 +2009,10 @@ export default function ViewerPage() {
             BlinkMacSystemFont,
             "Segoe UI",
             sans-serif;
+        }
+
+        .viewerPage * {
+          box-sizing: border-box;
         }
 
         .topbar {
@@ -2073,19 +2073,6 @@ export default function ViewerPage() {
           outline: none;
         }
 
-        .addBubbleGrid input[type="color"],
-        .linkCreator input[type="color"] {
-          width: 58px;
-          min-width: 58px;
-          height: 40px;
-          padding: 4px;
-          cursor: pointer;
-        }
-
-        .toolbar input {
-          width: 210px;
-        }
-
         .toolbar button,
         .addBubbleGrid button,
         .selectedActions button,
@@ -2101,10 +2088,34 @@ export default function ViewerPage() {
           background: rgba(37, 99, 235, 0.34);
         }
 
+        .toolbar button:hover,
+        .addBubbleGrid button:hover,
+        .selectedActions button:hover,
+        .libraryActions button:hover,
+        .linkCreator button:hover,
+        .quickFrameButtons button:hover,
+        .panelHeaderRow button:hover {
+          border-color: rgba(96, 165, 250, 0.58);
+          background: rgba(37, 99, 235, 0.48);
+        }
+
         .toolbar button:disabled,
         .linkCreator button:disabled {
           cursor: not-allowed;
           opacity: 0.45;
+        }
+
+        .toolbar input {
+          width: 210px;
+        }
+
+        .addBubbleGrid input[type="color"],
+        .linkCreator input[type="color"] {
+          width: 58px;
+          min-width: 58px;
+          height: 40px;
+          padding: 4px;
+          cursor: pointer;
         }
 
         .toolbar .activeButton {
@@ -2351,7 +2362,7 @@ export default function ViewerPage() {
         .sidePanel {
           display: flex;
           flex-direction: column;
-          gap: 14px;
+          gap: 12px;
         }
 
         .sidePanelDock {
@@ -2376,36 +2387,44 @@ export default function ViewerPage() {
           justify-content: space-between;
           gap: 10px;
           border: 1px solid rgba(148, 163, 184, 0.2);
-          background: rgba(15, 23, 42, 0.84);
+          background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.95), rgba(30, 41, 59, 0.82));
           border-radius: 18px;
-          padding: 10px 12px;
+          padding: 12px 14px;
+          box-shadow: 0 16px 34px rgba(0, 0, 0, 0.22);
         }
 
         .panelHeaderRow span {
           font-size: 12px;
-          font-weight: 900;
+          font-weight: 950;
           text-transform: uppercase;
-          letter-spacing: 0.1em;
+          letter-spacing: 0.12em;
           color: #93c5fd;
         }
 
         .panelHeaderRow button {
-          padding: 8px 10px;
+          padding: 8px 12px;
         }
 
         .panelBlock {
-          border: 1px solid rgba(148, 163, 184, 0.2);
-          background: rgba(15, 23, 42, 0.84);
+          border: 1px solid rgba(148, 163, 184, 0.22);
+          background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.94), rgba(2, 6, 23, 0.88));
           border-radius: 18px;
           overflow: hidden;
-          box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
+          box-shadow:
+            0 18px 40px rgba(0, 0, 0, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.03);
         }
 
         .panelBlockCollapsed {
-          background: rgba(15, 23, 42, 0.72);
+          background:
+            linear-gradient(135deg, rgba(15, 23, 42, 0.82), rgba(2, 6, 23, 0.72));
         }
 
         .panelTitleBar {
+          appearance: none;
+          -webkit-appearance: none;
           width: 100%;
           display: flex;
           align-items: center;
@@ -2414,11 +2433,17 @@ export default function ViewerPage() {
           border: 0;
           border-bottom: 1px solid rgba(148, 163, 184, 0.16);
           background:
-            linear-gradient(90deg, rgba(30, 64, 175, 0.38), rgba(15, 23, 42, 0.86));
+            linear-gradient(90deg, rgba(30, 64, 175, 0.42), rgba(15, 23, 42, 0.96));
           color: #e5e7eb;
           padding: 10px 12px;
           cursor: pointer;
           text-align: left;
+          font-family: inherit;
+        }
+
+        .panelTitleBar:hover {
+          background:
+            linear-gradient(90deg, rgba(37, 99, 235, 0.5), rgba(15, 23, 42, 0.98));
         }
 
         .panelBlockCollapsed .panelTitleBar {
@@ -2439,11 +2464,11 @@ export default function ViewerPage() {
           width: 24px;
           height: 24px;
           border-radius: 8px;
-          background: rgba(56, 189, 248, 0.16);
-          border: 1px solid rgba(56, 189, 248, 0.26);
+          background: rgba(56, 189, 248, 0.15);
+          border: 1px solid rgba(56, 189, 248, 0.3);
           color: #93c5fd;
           font-size: 13px;
-          font-weight: 900;
+          font-weight: 950;
           flex: 0 0 auto;
         }
 
@@ -2456,7 +2481,7 @@ export default function ViewerPage() {
           font-size: 11px;
           font-weight: 950;
           text-transform: uppercase;
-          letter-spacing: 0.13em;
+          letter-spacing: 0.12em;
         }
 
         .windowControls {
@@ -2470,7 +2495,8 @@ export default function ViewerPage() {
           width: 8px;
           height: 8px;
           border-radius: 999px;
-          opacity: 0.75;
+          opacity: 0.78;
+          box-shadow: 0 0 0 1px rgba(2, 6, 23, 0.45);
         }
 
         .windowControlRed {
@@ -2489,7 +2515,7 @@ export default function ViewerPage() {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 26px;
+          width: 28px;
           height: 22px;
           border-radius: 7px;
           margin-left: 3px;
@@ -2497,12 +2523,12 @@ export default function ViewerPage() {
           border: 1px solid rgba(148, 163, 184, 0.28);
           color: #f8fafc;
           font-size: 12px;
-          font-weight: 900;
+          font-weight: 950;
           line-height: 1;
         }
 
         .panelBody {
-          padding: 16px;
+          padding: 14px;
         }
 
         .lodStatusCard {
