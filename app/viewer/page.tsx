@@ -575,7 +575,9 @@ export default function ViewerPage() {
   }
 
   const activeLodBubbles = useMemo(() => {
-    return bubbles.filter((bubble) => bubble.lod === activeLod && !bubble.deleted);
+    return bubbles.filter(
+      (bubble) => bubble.lod === activeLod && !bubble.deleted
+    );
   }, [bubbles, activeLod]);
 
   const selectedBubble = useMemo(() => {
@@ -640,7 +642,9 @@ export default function ViewerPage() {
   }, [bubbleLinks, bubbleById, activeLod]);
 
   const visibleLinks = useMemo(() => {
-    return activeLodLinks.filter((link) => link.source.visible && link.target.visible);
+    return activeLodLinks.filter(
+      (link) => link.source.visible && link.target.visible
+    );
   }, [activeLodLinks]);
 
   const selectedPairExistingLinks = useMemo(() => {
@@ -673,21 +677,25 @@ export default function ViewerPage() {
     };
   }
 
-  function selectBubbleForLink(bubbleId: string) {
+  function addBubbleToLinkSelection(bubbleId: string) {
     const bubble = bubbleById.get(bubbleId);
 
     if (!bubble || bubble.deleted || bubble.lod !== activeLod) return;
 
     setLinkSelectionIds((previous) => {
       if (previous.includes(bubbleId)) {
-        return previous.filter((id) => id !== bubbleId);
+        return previous;
       }
 
-      if (previous.length >= 2) {
+      if (previous.length === 0) {
         return [bubbleId];
       }
 
-      return [...previous, bubbleId];
+      if (previous.length === 1) {
+        return [previous[0], bubbleId];
+      }
+
+      return [previous[1], bubbleId];
     });
   }
 
@@ -699,18 +707,12 @@ export default function ViewerPage() {
     event.stopPropagation();
 
     setSelectedBubbleId(bubble.id);
-
-    if (linkMode) {
-      selectBubbleForLink(bubble.id);
-    }
+    addBubbleToLinkSelection(bubble.id);
   }
 
   function handleLibraryBubbleClick(bubbleId: string) {
     setSelectedBubbleId(bubbleId);
-
-    if (linkMode) {
-      selectBubbleForLink(bubbleId);
-    }
+    addBubbleToLinkSelection(bubbleId);
   }
 
   function startDragBubble(
@@ -718,6 +720,7 @@ export default function ViewerPage() {
     bubble: BubbleView
   ) {
     setSelectedBubbleId(bubble.id);
+    addBubbleToLinkSelection(bubble.id);
 
     if (linkMode) {
       return;
@@ -830,6 +833,11 @@ export default function ViewerPage() {
 
     setCustomBubbles((previous) => [...previous, bubble]);
     setSelectedBubbleId(id);
+    setLinkSelectionIds((previous) => {
+      if (previous.length === 0) return [id];
+      if (previous.length === 1) return [previous[0], id];
+      return [previous[1], id];
+    });
   }
 
   function createLinkBetweenSelectedBubbles() {
@@ -1027,8 +1035,8 @@ export default function ViewerPage() {
     <main className="viewerPage">
       <section className="topbar">
         <div>
-          <p className="eyebrow">Mini-PLM · Viewer libre V0.9</p>
-          <h1>Placement libre par LOD avec création de liens par clic</h1>
+          <p className="eyebrow">Mini-PLM · Viewer libre V1.0</p>
+          <h1>Placement libre par LOD avec création de liens corrigée</h1>
         </div>
 
         <div className="toolbar">
@@ -1076,7 +1084,6 @@ export default function ViewerPage() {
             className={linkMode ? "linkModeButtonActive" : ""}
             onClick={() => {
               setLinkMode((current) => !current);
-              setLinkSelectionIds([]);
             }}
           >
             {linkMode ? "Mode lien actif" : "Mode lien"}
@@ -1644,14 +1651,14 @@ export default function ViewerPage() {
           </div>
 
           <div className="panelBlock">
-            <p className="panelLabel">Lecture V0.9</p>
+            <p className="panelLabel">Lecture V1.0</p>
 
             <ul className="readingList">
               <li>
-                <strong>Mode lien</strong> : clique sur deux bulles pour les sélectionner.
+                <strong>Sélection lien corrigée</strong> : un clic sur une bulle remplit directement Bulle 1 puis Bulle 2.
               </li>
               <li>
-                <strong>Sélection corrigée</strong> : les bulles sélectionnées remontent dans le bloc Créer / casser.
+                <strong>Mode lien</strong> : utile pour bloquer le déplacement pendant la création des liens.
               </li>
               <li>
                 <strong>Créer lien</strong> : crée un lien de la bulle 1 vers la bulle 2.
@@ -1660,7 +1667,7 @@ export default function ViewerPage() {
                 <strong>Casser lien</strong> : supprime tous les liens entre les deux bulles sélectionnées.
               </li>
               <li>
-                <strong>Bibliothèque</strong> : en mode lien, cliquer une bulle dans la bibliothèque la sélectionne aussi pour le lien.
+                <strong>Bibliothèque</strong> : cliquer une bulle dans la bibliothèque la sélectionne aussi pour le lien.
               </li>
             </ul>
           </div>
